@@ -39,8 +39,9 @@ class DmsApiClient:
     def get_auth_token(self) -> str:
         """DMS API'sinden auth token alır. Token'ı süresi dolana kadar cache'ler.
 
-        TODO (doğrula): Gerçek istek gövdesi/başlığı dms-app'teki çalışan
-        koda göre düzeltilmeli. Aşağıdaki sadece makul bir varsayım.
+        DOĞRULANDI (2026-09-08): Gerçek yanıt şekli
+        {"isSuccess": true, "statusCode": 200, "errorMessage": null, "data": "<JWT>"}
+        Token, JWT olarak "data" alanında geliyor ve ~15 gün geçerli.
         """
         now = time.time()
         if self._token and now < self._token_expires_at:
@@ -53,23 +54,19 @@ class DmsApiClient:
         resp.raise_for_status()
         data = resp.json()
 
-        # API'nin token alanının adı farklı olabilir (Token, AccessToken,
-        # token, vs.) -- gerçek yanıtı bir kere print/log edip burayı
-        # ona göre düzelt.
-        token = (
-            data.get("token")
-            or data.get("Token")
-            or data.get("accessToken")
-            or data.get("AccessToken")
-        )
+        if data.get("isSuccess") is False:
+            raise DmsApiError(f"Auth başarısız: {data.get('errorMessage')} (ham yanıt: {data})")
+
+        token = data.get("data")
         if not token:
             raise DmsApiError(
                 f"Auth yanıtında token alanı bulunamadı. Ham yanıt: {data}"
             )
 
         self._token = token
-        # Süre bilgisi yoksa temkinli davranıp 10 dakika say.
-        self._token_expires_at = now + 10 * 60
+        # Token JWT, ~15 gün geçerli. Temkinli davranıp 12 saat cache'liyoruz
+        # (uzun süren toplu çekimlerde gereksiz yere sık auth isteği atmamak için).
+        self._token_expires_at = now + 12 * 60 * 60
         return token
 
     def _headers(self) -> dict:
@@ -87,7 +84,10 @@ class DmsApiClient:
     ) -> list[dict]:
         """GET /api/Sales/GetPurchaseInvoicesByDates
 
-        API doğrudan array döndürüyor (r[0] gibi, r.data[0] değil).
+        DÜZELTİLDİ (2026-09-08): Özette "API doğrudan array döndürüyor"
+        deniyordu ama gerçekte auth ile aynı zarf (envelope) kullanılıyor:
+        {"isSuccess": true, "statusCode": 200, "errorMessage": null, "data": [...]}
+        Asıl liste "data" alanının içinde.
         """
         url = f"{self._base_url()}/api/Sales/GetPurchaseInvoicesByDates"
         params = {
@@ -99,9 +99,21 @@ class DmsApiClient:
         resp.raise_for_status()
         data = resp.json()
 
+        if isinstance(data, dict):
+            if data.get("isSuccess") is False:
+                raise DmsApiError(
+                    f"API hata döndürdü: {data.get('errorMessage')} (ham yanıt: {data})"
+                )
+            inner = data.get("data")
+            if isinstance(inner, list):
+                return inner
+            raise DmsApiError(
+                f"Beklenmeyen yanıt şekli ('data' alanı liste değil). Ham yanıt: {data}"
+            )
+
         if not isinstance(data, list):
             raise DmsApiError(
-                f"Beklenmeyen yanıt şekli (array bekleniyordu): {type(data)}"
+                f"Beklenmeyen yanıt şekli (array/dict bekleniyordu): {type(data)} - ham yanıt: {data}"
             )
         return data
 

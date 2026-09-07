@@ -15,6 +15,10 @@ def get_conn():
         user=config.DB_USER,
         password=config.DB_PASSWORD,
     )
+    # Windows + Türkçe yerel ayar bazen bağlantıyı WIN1254 client_encoding
+    # ile açıyor (psql'de aynı sorunu gördük). Türkçe karakterlerin
+    # bozulmadan yazılıp okunduğundan emin olmak için açıkça UTF8 zorluyoruz.
+    conn.set_client_encoding("UTF8")
     try:
         yield conn
     finally:
