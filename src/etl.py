@@ -5,6 +5,28 @@ upsert eder.
 
 Kullanım:
     python -m src.etl 2026-08-01 2026-08-31
+
+ETKİ HARİTASI -- bu dosya şu tablolara YAZAR (schema.sql'de bunları
+değiştirirsen burayı da kontrol et):
+    arac_tipleri, carline, model_yillari, dis_renkler, ic_renkler, ocn,
+    spec, spec_ocn, spec_ocn_renk, bayiler, araclar, plakalar,
+    gumruk_bilgileri, alis_faturalari
+
+Bu dosya şunlara OKUMA/BAĞIMLILIK olarak dayanır (bunları değiştirirsen
+burası bozulabilir):
+    - db.upsert_and_get_id / db.row_exists / db.get_id_by (db.py)
+    - api_client.get_client() ve DmsApiClient.get_purchase_invoices_by_dates
+      (api_client.py)
+    - schema.sql'deki tablo/kolon isimleri (SQL sorguları burada elle
+      yazıldı, kolon adı değişirse burada da değiştirilmeli)
+
+ÖĞRENME NOTU (genel akış): Bu script iki ana fonksiyondan oluşuyor:
+    1. process_invoice_record(cur, r) -- TEK bir fatura kaydını alır,
+       gerekli tüm lookup tablolarını (carline, renk, spec, vb.) sırayla
+       upsert eder, en sonda araç ve faturayı ekler.
+    2. run_range(start_date, end_date) -- API'den tarih aralığına göre
+       kayıtları 28'er günlük parçalar halinde çeker ve her kaydı
+       process_invoice_record'a tek tek gönderir.
 """
 import datetime as dt
 import logging
@@ -20,7 +42,15 @@ log = logging.getLogger("etl")
 
 
 def _parse_api_date(value):
-    """API'den gelen tarih string'ini date'e çevirir. Boş/None ise None döner."""
+    """API'den gelen tarih string'ini Python date nesnesine çevirir.
+    Boş/None ise None döner (veritabanına NULL olarak yazılır).
+
+    UYARI: API farklı bir tarih formatı göndermeye başlarsa (örn. saat
+    dilimi eklerse) burası "Tarih parse edilemedi" uyarısı basar ve o
+    alanı NULL bırakır -- veri kaybolmaz ama o tarih eksik kalır. Böyle bir
+    uyarı görürsen (log'larda WARNING satırı) bu fonksiyona yeni bir format
+    eklemen gerekir.
+    """
     if not value:
         return None
     # Beklenen format: 2026-08-31T00:00:00.000 (veya sonunda Z olabilir)
@@ -58,6 +88,12 @@ def process_invoice_record(cur, r: dict) -> str:
     (invoiceDetail.discountedAmount ile aynı), gerçek indirim tutarı ve KDV
     oranı sadece invoiceDetail içinde var (discountAmount, taxPercent) --
     o yüzden fiyat alanları invoiceDetail'den okunuyor, üst seviyeden değil.
+
+    ADIM SIRASI ÖNEMLİ: Her adım bir öncekinin ürettiği id'yi kullanıyor
+    (örn. spec, carline_id'ye ihtiyaç duyuyor). Adımların sırasını
+    değiştirirsen (örn. spec'i carline'dan önce eklemeye çalışırsan)
+    carline_id henüz yokken kullanılmaya çalışılır ve None gider -- hata
+    vermez ama veri eksik/yanlış bağlanır. Sırayı bozma.
     """
     detail = r.get("invoiceDetail") or {}
     item = detail.get("item") or {}
@@ -65,7 +101,10 @@ def process_invoice_record(cur, r: dict) -> str:
     dealer_info = r.get("serviceAndDealerInfo") or {}
     dealer = dealer_info.get("dealer") or {}
 
-    # --- 1. araç tipi ---
+    # --- 1. araç tipi (arac_tipleri tablosu) ---
+    # "Binek", "Ticari" gibi genel araç kategorisi. spec_info içindeki
+    # carLineTypeID (sayısal kod) hyundai_tip_id olarak, item.carLineType
+    # (okunabilir isim, örn. "Binek") adi olarak kaydediliyor.
     tip_id = None
     car_line_type_id = spec_info.get("carLineTypeID")
     if car_line_type_id:
@@ -79,7 +118,9 @@ def process_invoice_record(cur, r: dict) -> str:
             },
         )
 
-    # --- 2. carline ---
+    # --- 2. carline (carline tablosu) ---
+    # Model ailesi (örn. "IONIQ6 (CE)", "i20 (BC3)"). Bir üstte bulduğumuz
+    # tip_id'ye bağlanıyor.
     carline_kod = spec_info.get("carlineCode")
     carline_id = None
     if carline_kod:
@@ -90,9 +131,11 @@ def process_invoice_record(cur, r: dict) -> str:
             {"kod": carline_kod, "adi": spec_info.get("carlineName"), "tip_id": tip_id},
         )
 
-    # --- 3. model yılı ---
-    # NOT: bu endpoint'te "modelYear" alanı hep boş geliyor, gerçek model yılı
-    # "modelNumber" alanında (örn. 2026). modelNumber yoksa modelYear'a bak.
+    # --- 3. model yılı (model_yillari tablosu) ---
+    # UYARI: bu endpoint'te "modelYear" alanı hep boş geliyor, gerçek model
+    # yılı "modelNumber" alanında (örn. 2026). modelNumber yoksa modelYear'a
+    # bak (ileride API bunu düzeltirse diye). Bu satırı "düzeltip" sadece
+    # modelYear okursan araçların model yılı hep boş kalır.
     model_yil_id = None
     model_year = item.get("modelNumber") or item.get("modelYear")
     if model_year:
@@ -100,7 +143,9 @@ def process_invoice_record(cur, r: dict) -> str:
             cur, "model_yillari", ["yil"], {"yil": int(model_year)}
         )
 
-    # --- 4. spec ---
+    # --- 4. spec (spec tablosu) ---
+    # carline + model yılının birleşimi (örn. "IONIQ6 2026"). carline_id ve
+    # model_yil_id'ye bağlı -- ikisi de yukarıda hesaplanmış olmalı.
     spec_id = None
     spec_kod = spec_info.get("specCode")
     if spec_kod:
@@ -111,7 +156,7 @@ def process_invoice_record(cur, r: dict) -> str:
             {"kod": spec_kod, "carline_id": carline_id, "model_yil_id": model_yil_id},
         )
 
-    # --- 5. dış renk ---
+    # --- 5. dış renk (dis_renkler tablosu) ---
     dis_renk_id = None
     color_code = spec_info.get("colorCode")
     if color_code:
@@ -119,7 +164,7 @@ def process_invoice_record(cur, r: dict) -> str:
             cur, "dis_renkler", ["kod"], {"kod": color_code, "adi": spec_info.get("colorName")}
         )
 
-    # --- 6. iç renk ---
+    # --- 6. iç renk (ic_renkler tablosu) ---
     ic_renk_id = None
     interior_color_code = spec_info.get("interiorColorCode")
     if interior_color_code:
@@ -130,9 +175,13 @@ def process_invoice_record(cur, r: dict) -> str:
             {"kod": interior_color_code, "adi": spec_info.get("interiorColorName")},
         )
 
-    # --- 7. ocn ---
-    # NOT: motor_id / vites_id / donanim / ecall_var_mi bu endpoint'te yok.
-    # Servis/teknik detay endpoint'i eklendiğinde UPDATE ile doldurulacak.
+    # --- 7. ocn (ocn tablosu) ---
+    # Donanım/paket kodu (örn. "G0KJ" = "Advance 125kW STD Range").
+    # NOT: motor_id / vites_id / donanim / ecall_var_mi bu endpoint'te yok
+    # (schema.sql'de bu kolonlar var ama burada hep NULL kalıyor).
+    # İleride bir "teknik detay" endpoint'i eklenirse, o script bu ocn
+    # kaydını update_cols ile güncelleyerek motor_id/vites_id'yi doldurmalı
+    # -- yeni satır eklememeli (aynı ocn no'ya sahip olmalı).
     ocn_id = None
     ocn_no = spec_info.get("ocnNumber")
     if ocn_no:
@@ -143,7 +192,13 @@ def process_invoice_record(cur, r: dict) -> str:
             {"no": ocn_no, "adi": spec_info.get("specOcnName"), "spec_id": spec_id},
         )
 
-    # --- 8. spec_ocn ---
+    # --- 8. spec_ocn (spec_ocn tablosu) ---
+    # spec + ocn'in birleşimi (API'nin "fullSpecCode" dediği şey).
+    # UYARI: spec_id VEYA ocn_id yoksa (API'de o alan boşsa) bu adım hiç
+    # çalışmaz ve spec_ocn_id None kalır -- bir sonraki adımlar da (renk
+    # bağlama, araç) spec_ocn_renk_id'siz devam eder. Bu normal bir durum,
+    # hata değil, ama "neden bu aracın rengi/spec'i yok" diye sorarsan
+    # cevap muhtemelen burada.
     spec_ocn_id = None
     full_spec_kodu = spec_info.get("fullSpecCode")
     if spec_id and ocn_id:
@@ -154,7 +209,10 @@ def process_invoice_record(cur, r: dict) -> str:
             {"spec_id": spec_id, "ocn_id": ocn_id, "full_spec_kodu": full_spec_kodu},
         )
 
-    # --- 9. spec_ocn_renk ---
+    # --- 9. spec_ocn_renk (spec_ocn_renk tablosu) ---
+    # spec_ocn + dış renk + iç renk birleşimi -- bir aracın TAM konfigürasyonu
+    # (model + donanım + renk kombinasyonu). araclar tablosu doğrudan buraya
+    # bağlanıyor (bkz. adım 11).
     spec_ocn_renk_id = None
     if spec_ocn_id:
         spec_ocn_renk_id = db.upsert_and_get_id(
@@ -169,7 +227,11 @@ def process_invoice_record(cur, r: dict) -> str:
             },
         )
 
-    # --- 10. bayi ---
+    # --- 10. bayi (bayiler tablosu) ---
+    # update_cols=["kodu", "adi"] KASITLI: bayi bilgisi değişirse (örn. isim
+    # güncellenirse) her fatura işlendiğinde en güncel haliyle üzerine
+    # yazılsın istiyoruz. Diğer lookup tablolarında (carline, renk vb.)
+    # update_cols vermiyoruz çünkü onlar zaten değişmeyen sabit kodlar.
     bayi_id = None
     dealer_id = r.get("dealerID") or dealer_info.get("dealerId")
     if dealer_id:
@@ -185,7 +247,9 @@ def process_invoice_record(cur, r: dict) -> str:
             update_cols=["kodu", "adi"],
         )
 
-    # --- 11. araç (şasi merkez) ---
+    # --- 11. araç (araclar tablosu) -- ŞASİ MERKEZ ---
+    # Bu, tüm sistemin kalbi: şasi (VIN) numarası olmadan bir kaydı hiçbir
+    # şeye bağlayamayız, o yüzden yoksa direkt atlıyoruz (aşağıya bak).
     sasi_no = item.get("vinNumber")
     if not sasi_no:
         log.warning("Şasi numarası (vinNumber) olmayan kayıt atlandı: fatura id=%s", r.get("id"))
@@ -203,10 +267,17 @@ def process_invoice_record(cur, r: dict) -> str:
         )
         arac_id = cur.fetchone()[0]
         log.info("Yeni araç eklendi: sasi=%s", sasi_no)
-    # NOT: özet dosyasındaki mantığa göre şasi zaten varsa araç kaydı
-    # güncellenmiyor, sadece faturası ekleniyor.
+    # NOT (KASITLI TASARIM): şasi zaten varsa araç kaydı GÜNCELLENMİYOR,
+    # sadece faturası ekleniyor (adım 14). Yani bir aracın rengi/spec'i
+    # ilk görüldüğü faturadaki haliyle sabit kalır. Bunu değiştirmek
+    # istersen (örn. en son bilgiyle güncellemek) burada bir UPDATE
+    # eklemen gerekir -- ama dikkat: bu, ileride "araç ilk ne olarak
+    # alındı" bilgisini kaybetmene sebep olabilir.
 
-    # --- 12. plaka (varsa ve daha önce kaydedilmemişse) ---
+    # --- 12. plaka (plakalar tablosu) ---
+    # Aynı araca aynı plaka birden fazla kez eklenmesin diye önce kontrol
+    # ediyoruz (SELECT). Script'i aynı tarih aralığı için tekrar
+    # çalıştırdığında mükerrer plaka satırı OLUŞMAMASININ garantisi bu.
     plate = item.get("plateNumber")
     if plate:
         cur.execute(
@@ -221,7 +292,12 @@ def process_invoice_record(cur, r: dict) -> str:
                 (arac_id, plate, _parse_api_date(r.get("invoiceDate"))),
             )
 
-    # --- 13. gümrük bilgisi (varsa ve daha önce kaydedilmemişse) ---
+    # --- 13. gümrük bilgisi (gumruk_bilgileri tablosu) ---
+    # Sadece ithal araçlarda dolu geliyor (dutyClaimNumber/dutyInvoiceNumber
+    # boşsa yerli üretim ya da bilgi eksik demektir, hiçbir şey yazılmaz).
+    # "IS NOT DISTINCT FROM" kullanıyoruz (= yerine) çünkü talep_no/fatura_no
+    # NULL olabilir -- normal SQL'de NULL = NULL yanlış (UNKNOWN) sonucu
+    # verir, IS NOT DISTINCT FROM ise NULL'ları da doğru karşılaştırır.
     talep_no = r.get("dutyClaimNumber")
     gumruk_fatura_no = r.get("dutyInvoiceNumber")
     if talep_no or gumruk_fatura_no:
@@ -250,7 +326,13 @@ def process_invoice_record(cur, r: dict) -> str:
                 ),
             )
 
-    # --- 14. alış faturası ---
+    # --- 14. alış faturası (alis_faturalari tablosu) ---
+    # BU FONKSİYONUN "ASIL İŞİ" BURADA BİTİYOR: yukarıdaki 1-13 adımların
+    # hepsi aslında bu faturayı doğru bağlamak için gereken lookup/araç
+    # kayıtlarını hazırlamaktı. Fatura zaten işlenmişse (hyundai_fatura_id
+    # veritabanında varsa) hiçbir şey yapmadan çıkıyoruz -- bu, script'in
+    # tekrar tekrar çalıştırılabilir (idempotent) olmasını sağlayan asıl
+    # kontrol noktası.
     hyundai_fatura_id = r.get("id")
     if hyundai_fatura_id is None:
         log.warning("Fatura id'si olmayan kayıt (sasi=%s) atlandı.", sasi_no)
@@ -259,6 +341,10 @@ def process_invoice_record(cur, r: dict) -> str:
     if db.row_exists(cur, "alis_faturalari", "hyundai_fatura_id", str(hyundai_fatura_id)):
         return "atlandi"
 
+    # UYARI: Bu dört alanı üst seviyeden (r.get("totalBaseAmount") vb.)
+    # DEĞİL, invoiceDetail'den okuyoruz -- üst seviyedeki totalDiscountAmount
+    # yanıltıcı (bkz. fonksiyon docstring'i). Bunu "sadeleştireyim" diye üst
+    # seviyeye geri çevirme, rakamlar yanlış çıkar.
     liste_fiyat = detail.get("price")
     indirim = detail.get("discountAmount")
     indirimli_fiyat = detail.get("discountedAmount")
@@ -300,6 +386,14 @@ def run_range(start_date: dt.date, end_date: dt.date, chunk_days: int = 28):
     NOT: DMS API'sinin bir istekte en fazla 28 günlük aralık kabul ettiği
     doğrulandı (daha geniş aralıkta 400 Bad Request dönüyor). Bu yüzden
     varsayılan 28 -- daha yükseğe çıkarma.
+
+    HATA YÖNETİMİ (önemli): Bir parçanın API isteği başarısız olursa (bkz.
+    "except Exception" bloğu) o parça atlanıp bir SONRAKİ parçaya geçilir --
+    tüm çekim durmaz. Bu iyi bir şey (85 parçadan biri başarısız olsa bile
+    kalanı çekilir) ama şu anlama da geliyor: script sonunda hata vermeden
+    bitse bile aslında bir parça sessizce eksik kalmış olabilir. Bunu
+    yakalamak için README'deki "aya göre kayıt sayısı" sorgusunu kullan --
+    beklenmedik bir 0 varsa o parça başarısız olmuş demektir.
     """
     client = get_client()
 
@@ -320,6 +414,11 @@ def run_range(start_date: dt.date, end_date: dt.date, chunk_days: int = 28):
 
             log.info("  %d kayıt geldi", len(records))
 
+            # NOT: Her parça (chunk) için TEK BİR conn.commit() yapılıyor
+            # (parçadaki tüm kayıtlar işlendikten sonra). Yani bir parça
+            # içinde 100 kayıttan 99'u başarılı 1'i hatalıysa, o 1 kayıt
+            # atlanır (aşağıdaki "except Exception" ile) ama diğer 99'u
+            # yine de commit edilir -- kayıt bazında da script dayanıklı.
             with conn.cursor() as cur:
                 for r in records:
                     try:
@@ -338,6 +437,10 @@ def run_range(start_date: dt.date, end_date: dt.date, chunk_days: int = 28):
 
 
 if __name__ == "__main__":
+    # Komut satırından çalıştırıldığında (python -m src.etl BAŞLANGIÇ BİTİŞ)
+    # bu blok devreye girer. Başka bir dosyadan "from src.etl import
+    # run_range" ile import edilirse bu blok ÇALIŞMAZ -- sadece doğrudan
+    # çalıştırıldığında çalışır.
     if len(sys.argv) != 3:
         print("Kullanım: python -m src.etl YYYY-AA-GG YYYY-AA-GG")
         sys.exit(1)

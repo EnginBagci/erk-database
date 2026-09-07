@@ -2,6 +2,12 @@
 -- ERK ARAÇ DATABASE - PostgreSQL Şeması
 -- Şasi numarası (VIN) merkezli, tam normalize araç/fatura/müşteri şeması.
 -- Hyundai DMS API'sinden (GetPurchaseInvoicesByDates ve sonrası) beslenir.
+--
+-- ETKİ HARİTASI (öğrenme/takip notu):
+-- Bu dosyadaki her tabloya HANGİ Python dosyasının yazdığını yanında
+-- belirttik ("-- YAZAN: ..."). Bir tabloya kolon eklersen/kaldırırsan,
+-- o kolonu kullanan Python dosyasını da güncellemen gerekir -- yoksa
+-- INSERT sorguları kolon sayısı uyuşmazlığından hata verir.
 -- ============================================================
 
 BEGIN;
@@ -13,8 +19,13 @@ BEGIN;
 
 -- ============================================================
 -- LOOKUP TABLOLARI
+-- YAZAN: src/etl.py (adım 1-3) -- upsert_and_get_id ile, tekrar
+-- yazılmaz, aynı kod/isim geldiğinde mevcut kaydın id'si kullanılır.
 -- ============================================================
 
+-- Araç tipi (Binek, Ticari, vb.). UNIQUE(hyundai_tip_id) ÖNEMLİ: etl.py
+-- bu kolon üzerinden "ON CONFLICT" yapıyor, bu kısıtlama kaldırılırsa
+-- upsert hata verir.
 CREATE TABLE arac_tipleri (
     id                  SERIAL PRIMARY KEY,
     hyundai_tip_id      TEXT UNIQUE,          -- API: carLineTypeID
@@ -22,6 +33,7 @@ CREATE TABLE arac_tipleri (
     olusturulma_tarihi  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Model ailesi (örn. "IONIQ6 (CE)"). Her carline bir arac_tipi'ne bağlı.
 CREATE TABLE carline (
     id                  SERIAL PRIMARY KEY,
     kod                 TEXT NOT NULL UNIQUE, -- API: carlineCode
@@ -30,13 +42,20 @@ CREATE TABLE carline (
     olusturulma_tarihi  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Model yılı (örn. 2026). Ayrı bir tablo olmasının sebebi: aynı yıl birden
+-- fazla spec/carline tarafından paylaşılıyor, tekrar tekrar yazmamak için.
 CREATE TABLE model_yillari (
     id                  SERIAL PRIMARY KEY,
-    yil                 INTEGER NOT NULL UNIQUE  -- API: modelYear
+    yil                 INTEGER NOT NULL UNIQUE  -- API: modelYear (gerçekte modelNumber'dan geliyor, bkz. etl.py adım 3)
 );
 
 -- ============================================================
 -- RENK
+-- YAZAN: src/etl.py (adım 5-6). Kategori/özellik/malzeme tabloları şu an
+-- HİÇBİR YERDEN doldurulmuyor (etl.py sadece kod+isim yazıyor,
+-- kategori_id/ozellik_id hep NULL kalıyor) -- ileride renk verisini
+-- kategorize etmek istersen ya elle doldurulur ya da API'de bu bilgi
+-- bulunursa etl.py'ye eklenir.
 -- ============================================================
 
 CREATE TABLE dis_renk_kategorileri (
@@ -53,8 +72,8 @@ CREATE TABLE dis_renkler (
     id              SERIAL PRIMARY KEY,
     kod             TEXT NOT NULL UNIQUE,   -- API: colorCode
     adi             TEXT,                   -- API: colorName
-    kategori_id     INTEGER REFERENCES dis_renk_kategorileri(id),
-    ozellik_id      INTEGER REFERENCES dis_renk_ozellikleri(id),
+    kategori_id     INTEGER REFERENCES dis_renk_kategorileri(id),  -- şu an hep NULL
+    ozellik_id      INTEGER REFERENCES dis_renk_ozellikleri(id),   -- şu an hep NULL
     aktif_mi        BOOLEAN NOT NULL DEFAULT TRUE
 );
 
@@ -72,13 +91,18 @@ CREATE TABLE ic_renkler (
     id              SERIAL PRIMARY KEY,
     kod             TEXT NOT NULL UNIQUE,   -- API: interiorColorCode
     adi             TEXT,                   -- API: interiorColorName
-    kategori_id     INTEGER REFERENCES ic_renk_kategorileri(id),
-    malzeme_id      INTEGER REFERENCES ic_renk_malzemeleri(id),
+    kategori_id     INTEGER REFERENCES ic_renk_kategorileri(id),  -- şu an hep NULL
+    malzeme_id      INTEGER REFERENCES ic_renk_malzemeleri(id),   -- şu an hep NULL
     aktif_mi        BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 -- ============================================================
 -- MOTOR / TEKNİK
+-- YAZAN: ŞU AN HİÇBİR PYTHON DOSYASI. GetPurchaseInvoicesByDates bu
+-- bilgileri döndürmüyor. Bu tablolar ileride bir "teknik detay"
+-- endpoint'i eklenince kullanılacak (bkz. erk-arac-database skill'i).
+-- ocn.motor_id / ocn.vites_id o zaman UPDATE ile doldurulacak, etl.py'nin
+-- ocn INSERT'ine dokunmaya gerek kalmayacak.
 -- ============================================================
 
 CREATE TABLE yakit_tipleri (
@@ -102,10 +126,15 @@ CREATE TABLE motor_tipleri (
 
 -- ============================================================
 -- SPEC / OCN
+-- YAZAN: src/etl.py (adım 4, 7-9)
 -- (Bir "spec", bir carline + model yılı kombinasyonudur.
 --  Bir "ocn", o spec üzerindeki donanım/motor/vites paketidir.
 --  spec_ocn, ikisinin birleşimidir (API: fullSpecCode).
 --  spec_ocn_renk, o kombinasyonun belirli bir dış/iç renk versiyonudur.)
+--
+-- UYARI: Bu dört tablo (spec, ocn, spec_ocn, spec_ocn_renk) birbirine
+-- sıkı bağlı. Birine UNIQUE/kolon eklemeden önce etl.py'deki adım 4/7/8/9
+-- sırasını ve upsert_and_get_id çağrılarını mutlaka kontrol et.
 -- ============================================================
 
 CREATE TABLE spec (
@@ -120,10 +149,10 @@ CREATE TABLE ocn (
     no              TEXT NOT NULL UNIQUE,     -- API: ocnNumber
     adi             TEXT,                     -- API: specOcnName
     spec_id         INTEGER REFERENCES spec(id),
-    motor_id        INTEGER REFERENCES motor_tipleri(id),
-    vites_id        INTEGER REFERENCES vites_tipleri(id),
-    donanim         TEXT,
-    ecall_var_mi    BOOLEAN
+    motor_id        INTEGER REFERENCES motor_tipleri(id),  -- şu an hep NULL, bkz. yukarıdaki not
+    vites_id        INTEGER REFERENCES vites_tipleri(id),  -- şu an hep NULL
+    donanim         TEXT,                                  -- şu an hep NULL
+    ecall_var_mi    BOOLEAN                                -- şu an hep NULL
 );
 
 CREATE TABLE spec_ocn (
@@ -146,6 +175,9 @@ CREATE TABLE spec_ocn_renk (
 
 -- ============================================================
 -- BAYİ
+-- YAZAN: src/etl.py (adım 10) -- update_cols=["kodu","adi"] ile her
+-- faturada güncelleniyor (bkz. etl.py'deki not). Şu an tek bayi (ERK
+-- Otomotiv, kod 01105) olacak ama tablo çoklu bayiyi de destekler.
 -- ============================================================
 
 CREATE TABLE bayiler (
@@ -158,11 +190,16 @@ CREATE TABLE bayiler (
 
 -- ============================================================
 -- ARAÇ  (şasi = merkez)
+-- YAZAN: src/etl.py (adım 11) -- sadece şasi YOKSA yeni satır ekler.
+-- Şasi zaten varsa bu tabloya BİR DAHA YAZILMAZ (bkz. etl.py'deki
+-- "KASITLI TASARIM" notu) -- ileride başka bir endpoint bu araca dair
+-- ek bilgi getirirse (örn. plaka değişikliği), o script de "şasi var mı"
+-- kontrolüyle bu tabloya UPDATE atmalı, INSERT değil.
 -- ============================================================
 
 CREATE TABLE araclar (
     id                  SERIAL PRIMARY KEY,
-    sasi_no             TEXT NOT NULL UNIQUE,   -- API: vinNumber
+    sasi_no             TEXT NOT NULL UNIQUE,   -- API: vinNumber -- SİSTEMİN ANA ANAHTARI
     motor_no            TEXT,                   -- API: engineNumber
     model_yili          INTEGER,                -- API: modelYear (denormalize edilmiş hızlı erişim için)
     spec_ocn_renk_id    INTEGER REFERENCES spec_ocn_renk(id),
@@ -173,6 +210,8 @@ CREATE TABLE araclar (
 
 CREATE INDEX idx_araclar_spec_ocn_renk ON araclar(spec_ocn_renk_id);
 
+-- YAZAN: src/etl.py (adım 12) -- aynı (arac_id, plaka) ikilisi için
+-- mükerrer satır açılmaması kontrol ediliyor.
 CREATE TABLE plakalar (
     id          SERIAL PRIMARY KEY,
     arac_id     INTEGER NOT NULL REFERENCES araclar(id),
@@ -185,6 +224,10 @@ CREATE TABLE plakalar (
 CREATE INDEX idx_plakalar_arac ON plakalar(arac_id);
 CREATE INDEX idx_plakalar_plaka ON plakalar(plaka);
 
+-- YAZAN: src/etl.py (adım 13) -- sadece talep_no/fatura_no doluysa
+-- yazılır (ithal araçlar). Bu tabloda UNIQUE kısıtlaması YOK (aynı arac_id
+-- için birden fazla gümrük kaydı olabilir ihtimaline karşı), o yüzden
+-- etl.py kendi elle bir SELECT ile mükerrer kaydı önlüyor.
 CREATE TABLE gumruk_bilgileri (
     id                  SERIAL PRIMARY KEY,
     arac_id             INTEGER NOT NULL REFERENCES araclar(id),
@@ -199,23 +242,27 @@ CREATE INDEX idx_gumruk_arac ON gumruk_bilgileri(arac_id);
 
 -- ============================================================
 -- FATURA (alış)
+-- YAZAN: src/etl.py (adım 14) -- BU TABLONUN DOLUP DOLMAMASI, ETL
+-- SCRIPT'İNİN "İŞİNİ BİTİRDİĞİNİN" GÖSTERGESİ. hyundai_fatura_id UNIQUE
+-- olduğu için script tekrar çalıştırıldığında aynı fatura ikinci kez
+-- eklenmez (idempotent) -- bu kısıtlamayı kaldırma.
 -- ============================================================
 
 CREATE TABLE alis_faturalari (
     id                  SERIAL PRIMARY KEY,
     arac_id             INTEGER NOT NULL REFERENCES araclar(id),
     bayi_id             INTEGER REFERENCES bayiler(id),
-    hyundai_fatura_id   TEXT NOT NULL UNIQUE,   -- API: fatura.id
+    hyundai_fatura_id   TEXT NOT NULL UNIQUE,   -- API: fatura.id -- mükerrer kayıt engelleyen kilit nokta
     fatura_no           TEXT,                   -- API: formalInvoiceNumber
     irsaliye_no         TEXT,                   -- API: waybillNumber
     fatura_tarihi       DATE,                   -- API: invoiceDate
     irsaliye_tarihi     DATE,                   -- API: waybillDate
-    liste_fiyat         NUMERIC(14,2),          -- API: totalBaseAmount
-    indirim             NUMERIC(14,2),          -- API: totalDiscountAmount
-    indirimli_fiyat     NUMERIC(14,2),          -- liste_fiyat - indirim
-    kdv_orani           NUMERIC(5,2),
-    kdv_tutari          NUMERIC(14,2),          -- API: totalTaxAmount
-    toplam              NUMERIC(14,2),          -- API: totalInvoiceAmount
+    liste_fiyat         NUMERIC(14,2),          -- API: invoiceDetail.price
+    indirim             NUMERIC(14,2),          -- API: invoiceDetail.discountAmount
+    indirimli_fiyat     NUMERIC(14,2),          -- API: invoiceDetail.discountedAmount
+    kdv_orani           NUMERIC(5,2),           -- API: invoiceDetail.taxPercent
+    kdv_tutari          NUMERIC(14,2),          -- API: invoiceDetail.taxAmount
+    toplam              NUMERIC(14,2),          -- API: invoiceDetail.totalAmount
     durum               TEXT,                   -- API: invoiceStatus
     olusturulma_tarihi  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -226,6 +273,8 @@ CREATE INDEX idx_alis_faturalari_tarih ON alis_faturalari(fatura_tarihi);
 
 -- ============================================================
 -- MÜŞTERİ (sonradan eklenecek modül)
+-- YAZAN: ŞU AN HİÇBİR PYTHON DOSYASI. Bu tablolar plandaki sonraki adım
+-- (müşteri/araç sahipliği endpoint'i) için hazır duruyor, henüz boş.
 -- ============================================================
 
 CREATE TABLE musteri_tipleri (
@@ -285,6 +334,9 @@ CREATE INDEX idx_musteri_emailler_musteri ON musteri_emailler(musteri_id);
 
 -- ============================================================
 -- ARAÇ SAHİPLİĞİ (köprü tablo)
+-- YAZAN: ŞU AN HİÇBİR PYTHON DOSYASI. Bir aracın zaman içinde birden
+-- fazla sahibi olabileceği için (2. el satışlar dahil) araclar ve
+-- musteriler arasında doğrudan bir kolon yerine bu köprü tablo kullanıldı.
 -- ============================================================
 
 CREATE TABLE arac_sahipligi (
@@ -303,6 +355,9 @@ CREATE INDEX idx_arac_sahipligi_musteri ON arac_sahipligi(musteri_id);
 
 -- ============================================================
 -- SATIŞ / SERVİS (sonradan eklenecek modül)
+-- YAZAN: ŞU AN HİÇBİR PYTHON DOSYASI. satis_faturalari.arac_id ve
+-- servis_is_emirleri.arac_id, araclar tablosuna bağlı olduğu için bu
+-- modüller eklendiğinde de "şasi merkez" prensibi korunuyor.
 -- ============================================================
 
 CREATE TABLE satis_faturalari (
