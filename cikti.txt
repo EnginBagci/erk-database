@@ -1,0 +1,25 @@
+ERK Arac Database - Goruntuleyici baslatiliyor...
+
+Sunucu bu pencerede calisacak, tarayici birkac saniye icinde
+otomatik acilacak. Acilmazsa ya da "baglanti reddedildi" gorursen,
+tarayicida F5'e (yenile) bas.
+Sunucuyu durdurmak icin bu pencereyi kapat ya da CTRL+C'ye bas.
+
+Tarayýcýda þu adresi aç: http://localhost:5050
+ * Serving Flask app 'viewer'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5050
+Press CTRL+C to quit
+127.0.0.1 - - [08/Sep/2026 02:33:28] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [08/Sep/2026 02:33:28] "GET /favicon.ico HTTP/1.1" 404 -
+127.0.0.1 - - [08/Sep/2026 02:38:11] "GET /?baslangic=2026-09-01&bitis=2026-09-08 HTTP/1.1" 200 -
+127.0.0.1 - - [08/Sep/2026 02:38:21] "GET /?baslangic=2026-08-01&bitis=2026-09-08 HTTP/1.1" 200 -
+127.0.0.1 - - [08/Sep/2026 02:38:51] "GET /?sasi=NLHBM81G8TZ815464 HTTP/1.1" 200 -
+127.0.0.1 - - [08/Sep/2026 08:37:43] "GET /?sasi=NLHBM81G8TZ815464 HTTP/1.1" 200 -
+127.0.0.1 - - [08/Sep/2026 08:37:43] "GET /favicon.ico HTTP/1.1" 404 -
+127.0.0.1 - - [08/Sep/2026 08:39:06] "GET / HTTP/1.1" 200 -
+Terminate batch job (Y/N)? 
+^C
+Sunucu durdu.
+Press any key to continue . . . 
