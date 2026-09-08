@@ -109,6 +109,7 @@ _VERI_CEK_KILIT notu).
 import calendar
 import datetime as dt
 import threading
+from urllib.parse import urlencode
 
 from flask import Flask, jsonify, redirect, request, render_template_string, url_for
 import psycopg2.extras
@@ -117,6 +118,12 @@ from . import db
 from . import etl
 
 app = Flask(__name__)
+
+# Ana sayfa sonuç tablosunda sayfa başına gösterilecek kayıt sayısı.
+# 2026-09-08: eskiden "LIMIT 500" ile SESSİZCE kesiliyordu (500'den fazla
+# sonuç varsa geri kalanı hiç gösterilmiyordu) -- şimdi bunun yerine
+# sayfalama var, veri kaybı yok, sadece 500'er 500'er sayfalara bölünüyor.
+SAYFA_BOYUTU = 500
 
 # ------------------------------------------------------------------
 # SQL sorguları
@@ -132,22 +139,34 @@ app = Flask(__name__)
 # model_yili, dis_renk, ic_renk, yakit_adi, plaka, fatura_no,
 # fatura_tarihi, toplam.
 
-# 1) GENEL ARAMA: tek bir kutuya yazılan metin; şase, motor no, model,
-#    dış/iç renk, fatura no ya da plakadan HERHANGİ BİRİYLE eşleşirse
-#    sonuca girer (ILIKE = büyük/küçük harf duyarsız, "içerir" araması).
-#    ÖĞRENME NOTU: %s yedi kere geçiyor, bu yüzden çağırırken aynı
-#    joker'i ([joker]*7) yedi kere parametre olarak veriyoruz.
-GENEL_ARAMA_SORGUSU = """
-    SELECT
-        a.sasi_no, a.motor_no,
-        c.adi AS carline_adi, a.model_yili,
-        dr.adi AS dis_renk, ic.adi AS ic_renk,
-        yt.adi AS yakit_adi,
-        (
-            SELECT p.plaka FROM plakalar p
-            WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
-        ) AS plaka,
-        af.fatura_no, af.fatura_tarihi, af.toplam
+# 1) BİRLEŞİK ARAMA (2026-09-08, İKİNCİ sürüm -- eskiden GENEL ARAMA /
+#    TARİH ARALIĞI / FİLTRE diye ÜÇ AYRI sorguydu, hangisi kullanılacağı
+#    bir ÖNCELİK SIRASINA göre seçiliyordu ("model seçiliyse SADECE ona
+#    göre ara, metin/tarih YOK SAYILIR" gibi) -- kullanıcı "Ara butonu hiç
+#    bir filtreye takılmamalı, tarih filitreleri bağımsız olmalı" diye
+#    haklı olarak ŞİKAYET ETTİ: model seçiliyken tarih ya da metin
+#    kutusunun hiçbir etkisi olmuyordu. ŞİMDİ TEK bir sorgu -- doldurulan
+#    HER alan (metin, model, dış renk, yakıt tipi, tarih aralığı) AYNI
+#    ANDA, VE (AND) mantığıyla birlikte uygulanıyor; boş bırakılan alan
+#    hiç filtre uygulamıyormuş gibi davranıyor (ÖĞRENME NOTU: "(%s = ''
+#    OR kolon = %s)" deseni -- kutu boşsa ilk taraf hep DOĞRU olduğu için
+#    o AND koşulu sonucu etkilemiyor). GÖVDE (FROM/JOIN/WHERE) hem satır
+#    sorgusunda hem de sayısını almak için COUNT sorgusunda TEKRAR
+#    kullanılıyor (bkz. BIRLESIK_ARAMA_SAYISI_SORGUSU) -- ikisi arasında
+#    fark varsa "toplam X kayıt" ile gerçekte gelen satırlar TUTARSIZ
+#    olur, o yüzden gövdeyi TEK bir yerde (BIRLESIK_ARAMA_GOVDESI) tutup
+#    ikisine de aynısını ekliyoruz.
+#
+#    TARİH ARALIĞI PARAMETRESİ: "(%s OR af.fatura_tarihi BETWEEN %s AND
+#    %s)" -- ilk %s, Python'dan gelen bir BOOLEAN (tarih_filtresi_yok).
+#    SQL'in üç-değerli mantığı sayesinde bu TRUE olduğunda (tarih filtresi
+#    istenmiyorsa) BETWEEN'in sonucu ne olursa olsun (hatta tarih alanları
+#    NULL/anlamsız olsa bile) tüm OR ifadesi DOĞRU olur -- bu yüzden tarih
+#    filtresi YOKKEN bas/bit'e gerçek (uzak) tarihler veriyoruz, NULL değil
+#    (NULL ile BETWEEN'in sonucu UNKNOWN olur, "FALSE OR UNKNOWN" YANLIŞ
+#    sonuç doğurup satırları YANLIŞLIKLA elerdi -- bu yüzden None yerine
+#    1900-01-01 / 2100-01-01 gibi zararsız sabit tarihler kullanılıyor).
+BIRLESIK_ARAMA_GOVDESI = """
     FROM araclar a
     LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
     LEFT JOIN spec_ocn so ON so.id = sor.spec_ocn_id
@@ -158,24 +177,26 @@ GENEL_ARAMA_SORGUSU = """
     LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
     LEFT JOIN alis_faturalari af ON af.arac_id = a.id
     WHERE
-        a.sasi_no ILIKE %s
-        OR a.motor_no ILIKE %s
-        OR c.adi ILIKE %s
-        OR dr.adi ILIKE %s
-        OR ic.adi ILIKE %s
-        OR af.fatura_no ILIKE %s
-        OR EXISTS (
-            SELECT 1 FROM plakalar p2
-            WHERE p2.arac_id = a.id AND p2.plaka ILIKE %s
+        (%s = '' OR c.adi = %s)
+        AND (%s = '' OR dr.adi = %s)
+        AND (%s = '' OR (%s = 'TANIMSIZ_ISARETI' AND a.yakit_id IS NULL) OR yt.adi = %s)
+        AND (
+            %s = ''
+            OR a.sasi_no ILIKE %s
+            OR a.motor_no ILIKE %s
+            OR c.adi ILIKE %s
+            OR dr.adi ILIKE %s
+            OR ic.adi ILIKE %s
+            OR af.fatura_no ILIKE %s
+            OR EXISTS (
+                SELECT 1 FROM plakalar p2
+                WHERE p2.arac_id = a.id AND p2.plaka ILIKE %s
+            )
         )
-    ORDER BY af.fatura_tarihi DESC NULLS LAST
-    LIMIT 500
+        AND (%s OR af.fatura_tarihi BETWEEN %s AND %s)
 """
 
-# 2) TARİH ARALIĞI: belirli bir aralıkta FATURASI olan araçlar (özet
-#    kartlarına tıklayınca da bu sorgu kullanılıyor, kartların linki
-#    /?baslangic=...&bitis=... şeklinde).
-TARIH_LISTESI_SORGUSU = """
+BIRLESIK_ARAMA_SORGUSU = """
     SELECT
         a.sasi_no, a.motor_no,
         c.adi AS carline_adi, a.model_yili,
@@ -186,22 +207,17 @@ TARIH_LISTESI_SORGUSU = """
             WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
         ) AS plaka,
         af.fatura_no, af.fatura_tarihi, af.toplam
-    FROM alis_faturalari af
-    JOIN araclar a ON a.id = af.arac_id
-    LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
-    LEFT JOIN spec_ocn so ON so.id = sor.spec_ocn_id
-    LEFT JOIN spec s ON s.id = so.spec_id
-    LEFT JOIN carline c ON c.id = s.carline_id
-    LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
-    LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
-    LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
-    WHERE af.fatura_tarihi BETWEEN %s AND %s
-    ORDER BY af.fatura_tarihi DESC
-    LIMIT 500
+""" + BIRLESIK_ARAMA_GOVDESI + """
+    ORDER BY af.fatura_tarihi DESC NULLS LAST
+    LIMIT %s OFFSET %s
 """
 
-# 3) TÜM ARAÇLAR: "Toplam Araç" kartına tıklayınca -- hiçbir filtre yok,
+BIRLESIK_ARAMA_SAYISI_SORGUSU = "SELECT COUNT(*) AS sayi " + BIRLESIK_ARAMA_GOVDESI
+
+# 2) TÜM ARAÇLAR: "Toplam Araç" kartına tıklayınca -- hiçbir filtre yok,
 #    faturası olmayan araçlar bile (varsa) LEFT JOIN sayesinde görünür.
+#    2026-09-08: 500 sınırı KALDIRILDI, bunun yerine sayfalama (LIMIT/
+#    OFFSET) eklendi -- bkz. anasayfa()'daki SAYFA_BOYUTU.
 TUM_ARACLAR_SORGUSU = """
     SELECT
         a.sasi_no, a.motor_no,
@@ -223,10 +239,11 @@ TUM_ARACLAR_SORGUSU = """
     LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
     LEFT JOIN alis_faturalari af ON af.arac_id = a.id
     ORDER BY af.fatura_tarihi DESC NULLS LAST
-    LIMIT 500
+    LIMIT %s OFFSET %s
 """
+TUM_ARACLAR_SAYISI_SORGUSU = "SELECT COUNT(*) AS sayi FROM araclar"
 
-# 4) GÜMRÜK KAYDI OLAN ARAÇLAR: "Gümrük Kaydı Olan Araç" kartına tıklayınca.
+# 3) GÜMRÜK KAYDI OLAN ARAÇLAR: "Gümrük Kaydı Olan Araç" kartına tıklayınca.
 ITHAL_ARACLAR_SORGUSU = """
     SELECT
         a.sasi_no, a.motor_no,
@@ -249,7 +266,11 @@ ITHAL_ARACLAR_SORGUSU = """
     LEFT JOIN alis_faturalari af ON af.arac_id = a.id
     WHERE EXISTS (SELECT 1 FROM gumruk_bilgileri g WHERE g.arac_id = a.id)
     ORDER BY af.fatura_tarihi DESC NULLS LAST
-    LIMIT 500
+    LIMIT %s OFFSET %s
+"""
+ITHAL_ARACLAR_SAYISI_SORGUSU = """
+    SELECT COUNT(*) AS sayi FROM araclar a
+    WHERE EXISTS (SELECT 1 FROM gumruk_bilgileri g WHERE g.arac_id = a.id)
 """
 
 # Yakıt Tipi comboboxunda "Tanımsız" seçeneğini temsil eden özel bir
@@ -259,52 +280,23 @@ ITHAL_ARACLAR_SORGUSU = """
 # yüzden combobox'ta gösterilen metin Python tarafında SENTETIK olarak
 # ekleniyor (bkz. aşağıdaki anasayfa() fonksiyonu), SQL'e gönderilirken de
 # "yt.adi = %s" yerine "a.yakit_id IS NULL" koşuluna çevriliyor.
-# UYARI: Bu METİN aşağıdaki FILTRE_SORGUSU'nun İÇİNDE SABİT (literal)
-# olarak da geçiyor ('TANIMSIZ_ISARETI') -- ikisini birbirinden BAĞIMSIZ
-# değiştirme, aynı kalmaları gerekiyor, yoksa "Tanımsız" filtresi sessizce
-# çalışmaz hale gelir.
+# UYARI: Bu METİN yukarıdaki BIRLESIK_ARAMA_GOVDESI'NİN İÇİNDE SABİT
+# (literal) olarak da geçiyor ('TANIMSIZ_ISARETI') -- ikisini birbirinden
+# BAĞIMSIZ değiştirme, aynı kalmaları gerekiyor, yoksa "Tanımsız" filtresi
+# sessizce çalışmaz hale gelir.
 YAKIT_TANIMSIZ_DEGER = "TANIMSIZ_ISARETI"
 
-# 5) FİLTRE: Model / Dış Renk / Yakıt Tipi comboboxlarına göre (istenilen
-#    herhangi bir alt kümesi boş bırakılabilir). ÖĞRENME NOTU: "(%s = ''
-#    OR kolon = %s)" deseni, tek bir SABİT SQL metniyle OPSİYONEL filtre
-#    yapmamızı sağlıyor -- kutu boşsa (%s = '') o koşul hep DOĞRU olur,
-#    yani o alanda hiç filtre uygulanmamış gibi davranır. Bu yüzden her
-#    kutu için aynı değeri İKİ KERE parametre olarak veriyoruz. Yakıt Tipi
-#    için ÜÇÜNCÜ bir OR dalı daha var: "__tanimsiz__" seçilirse yt.adi'ye
-#    değil, DOĞRUDAN a.yakit_id IS NULL'a bakıyor -- bu sayede motor_no'dan
-#    yakıt tipi tahmin edilemeyen (G/D/E ile başlamayan ya da motor_no'su
-#    boş olan) araçlar da listelenip görülebiliyor.
-FILTRE_SORGUSU = """
-    SELECT
-        a.sasi_no, a.motor_no,
-        c.adi AS carline_adi, a.model_yili,
-        dr.adi AS dis_renk, ic.adi AS ic_renk,
-        yt.adi AS yakit_adi,
-        (
-            SELECT p.plaka FROM plakalar p
-            WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
-        ) AS plaka,
-        af.fatura_no, af.fatura_tarihi, af.toplam
-    FROM araclar a
-    LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
-    LEFT JOIN spec_ocn so ON so.id = sor.spec_ocn_id
-    LEFT JOIN spec s ON s.id = so.spec_id
-    LEFT JOIN carline c ON c.id = s.carline_id
-    LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
-    LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
-    LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
-    LEFT JOIN alis_faturalari af ON af.arac_id = a.id
-    WHERE
-        (%s = '' OR c.adi = %s)
-        AND (%s = '' OR dr.adi = %s)
-        AND (%s = '' OR (%s = 'TANIMSIZ_ISARETI' AND a.yakit_id IS NULL) OR yt.adi = %s)
-    ORDER BY af.fatura_tarihi DESC NULLS LAST
-    LIMIT 500
-"""
-
 # ---- Ana sayfadaki 3 combobox'ı (Model/Dış Renk/Yakıt Tipi) doldurmak
-#      için veritabanındaki BENZERSİZ değerleri çeken üç küçük sorgu.
+#      için veritabanındaki BENZERSİZ değerleri çeken üç sorgu.
+#      2026-09-08: "İL SEÇİNCE İLÇE ONA GÖRE DOLSUN" mantığı eklendi --
+#      Model seçiliyse (model_secili doluysa) Dış Renk ve Yakıt Tipi
+#      seçenekleri SADECE o modelde GERÇEKTEN VAR OLAN değerlerle
+#      sınırlanıyor (yoksa kullanıcı var olmayan bir renk/yakıt
+#      kombinasyonunda "0 sonuç" filtresine takılıp kalıyordu). Model
+#      seçili DEĞİLSE (%s = '' ise) eskisi gibi TÜM değerler listelenir.
+#      NOT: renk ve yakıt seçimleri birbirini KISITLAMIYOR (sadece model
+#      -> renk ve model -> yakıt yönünde cascade var, kullanıcı sadece bu
+#      yönü istedi).
 MODEL_SECENEKLERI_SORGUSU = """
     SELECT DISTINCT c.adi AS deger
     FROM araclar a
@@ -320,8 +312,12 @@ RENK_SECENEKLERI_SORGUSU = """
     SELECT DISTINCT dr.adi AS deger
     FROM araclar a
     LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
+    LEFT JOIN spec_ocn so ON so.id = sor.spec_ocn_id
+    LEFT JOIN spec s ON s.id = so.spec_id
+    LEFT JOIN carline c ON c.id = s.carline_id
     LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
     WHERE dr.adi IS NOT NULL
+        AND (%s = '' OR c.adi = %s)
     ORDER BY dr.adi
 """
 
@@ -329,6 +325,11 @@ YAKIT_SECENEKLERI_SORGUSU = """
     SELECT DISTINCT yt.adi AS deger
     FROM araclar a
     JOIN yakit_tipleri yt ON yt.id = a.yakit_id
+    LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
+    LEFT JOIN spec_ocn so ON so.id = sor.spec_ocn_id
+    LEFT JOIN spec s ON s.id = so.spec_id
+    LEFT JOIN carline c ON c.id = s.carline_id
+    WHERE (%s = '' OR c.adi = %s)
     ORDER BY yt.adi
 """
 
@@ -337,9 +338,6 @@ YAKIT_SECENEKLERI_SORGUSU = """
 YAKIT_TANIMSIZ_SAYISI_SORGUSU = """
     SELECT COUNT(*) AS sayi FROM araclar WHERE yakit_id IS NULL
 """
-# UYARI: LIMIT 500 kasıtlı -- geniş bir arama/tarih aralığı binlerce satır
-# döndürebileceğinden sayfa yavaşlamasın diye. Sıralama/filtreleme sadece
-# ekrandaki (en fazla 500) satır üzerinde çalışır.
 
 # ---- Detay sayfası ("/arac/<sasi_no>") için üç sorgu --------------------
 SASI_SORGUSU = """
@@ -526,11 +524,16 @@ ORTAK_STIL = """
      plan rengi body'yle AYNI (#eef1f5) olmalı, yoksa altından kayan
      tablo satırları şeffaf üstten görünür. */
   .sabit-ust { position: sticky; top: 0; z-index: 300; background: #eef1f5; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
-  .icerik-ust { padding: 20px 28px 4px; }
-  .icerik-alt { padding: 12px 28px 40px; }
+  /* Bölümler arası boşluklar (2026-09-08: "aradaki boşlukları azaltarak
+     gidelim" diye sıkıştırıldı -- eskiden 20px/24px'ti). Amaç: .sabit-ust
+     bloğu (üst bar + kartlar + arama kutusu) daha az yer kaplasın ki hem
+     tablo başlığı ekrana daha erken/daha az boşlukla yapışsın, hem de
+     kaydırmadan görünen satır sayısı artsın. */
+  .icerik-ust { padding: 14px 28px 0; }
+  .icerik-alt { padding: 8px 28px 40px; }
 
   /* Özet kartları -- TIKLANABİLİR: her kart bir <a> ile sarmalanıyor. */
-  .kart-satiri { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .kart-satiri { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
   .kart-link { flex: 1 1 140px; text-decoration: none; color: inherit; display: block; }
   .kart-link:hover .kart { box-shadow: 0 4px 12px rgba(0,0,0,0.15); transform: translateY(-1px); }
   .kart {
@@ -553,12 +556,12 @@ ORTAK_STIL = """
   .kart.mor { border-top-color: #7c3aed; }
   .kart.mor .sayi { color: #7c3aed; }
 
-  h2 { font-size: 15px; margin-top: 30px; color: #111827; }
-  .arama-kartlari { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; align-items: flex-start; }
+  h2 { font-size: 15px; margin: 10px 0 4px; color: #111827; }
+  .arama-kartlari { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 0; align-items: flex-start; }
   form.arama-formu {
     background: #fff;
     border-radius: 8px;
-    padding: 16px 18px;
+    padding: 10px 16px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
   }
   /* TEK SATIRLIK arama/filtre kutusu (2026-09-08, ÜÇÜNCÜ deneme): önceki
@@ -573,7 +576,6 @@ ORTAK_STIL = """
      flex-wrap sayesinde gruplar alt satıra kayar -- ama bu istisna,
      kural değil. */
   .arama-formu-birlesik { flex: 1 1 100%; }
-  form.arama-formu b { font-size: 13px; color: #111827; }
   label { display: inline-block; font-size: 13px; }
   input[type=text], input[type=date] {
     padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px;
@@ -594,19 +596,31 @@ ORTAK_STIL = """
      çok daha az yer kaplasın diye. */
   .arama-tek-satir {
     display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
-    margin-top: 10px;
   }
   .arama-grup { display: flex; flex-direction: column; gap: 3px; }
   .arama-grup label {
     font-size: 10px; font-weight: 700; color: #6b7280; text-transform: uppercase;
     letter-spacing: 0.02em;
   }
-  .arama-grup-genel { flex: 1 1 200px; min-width: 170px; }
+  /* Genel arama kutusu (2026-09-08: "ara çubuğunu kısaltıp hızlı tarihin
+     yanına hızlı tarih butonlarını ekleyelim" diye KISALTILDI -- artık
+     kalan boşluğu doldurmak için BÜYÜMÜYOR (flex-grow: 0), sabit/küçük
+     bir genişlikte duruyor ki hızlı tarih butonlarına TEK satırda yer
+     kalsın). */
+  .arama-grup-genel { flex: 0 0 170px; }
   .arama-grup-genel input[type=text] { width: 100%; }
-  .arama-grup select { width: 116px; }
+  .arama-grup select { width: 112px; }
   .arama-grup input[type=date] { width: 126px; }
   .arama-tarih-ayrac { padding-bottom: 8px; color: #9ca3af; font-size: 13px; }
-  .arama-hizli-tarih { width: 118px; }
+  .arama-hizli-tarih { width: 106px; }
+  /* Hızlı Tarih açılır listesinin YANINDA aynı işi yapan butonlar (2026-
+     09-08: kullanıcı "combobox olarak güzel olmuş ama buton seçimlerini
+     de istiyorum" dedi -- ikisi BİRLİKTE duruyor, hangisi kullanışlıysa
+     o kullanılabilsin diye). */
+  .arama-hizli-tarih-butonlar { display: flex; gap: 4px; flex-wrap: wrap; }
+  .arama-hizli-tarih-butonlar button {
+    padding: 7px 9px; font-size: 11.5px;
+  }
 
   /* Temizle: <button> DEĞİL, düz "/" linkine giden bir <a> -- tüm alanları
      sıfırlayıp sayfayı varsayılan (bu ay) görünümle yeniden yükler.
@@ -627,41 +641,33 @@ ORTAK_STIL = """
     background: #fff;
     border-radius: 8px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-    /* overflow-x: auto -- geniş tabloyu (11 sütun) dar ekranda yatay
-       kaydırabilmek için. NOT: bu satırı tablo başlığını (thead) sabit
-       (sticky) yapmak için KULLANMA -- aşağıdaki thead CSS'inin
-       üstündeki notta anlatıldığı gibi, bu ikisi Chrome'da BİRLİKTE
-       ÇALIŞMIYOR (canlı testle doğrulandı), sticky satırlar veri
-       satırlarının üstüne biniyor. */
-    overflow-x: auto;
-    margin-bottom: 24px;
+    margin-bottom: 16px;
   }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { border: 1px solid #eef0f2; padding: 7px 10px; text-align: left; white-space: nowrap; }
-  /* ÖNEMLİ (2026-09-08, İKİNCİ deneme -- tablo başlığını da sabit üst
-     barın altına yapıştırma fikri TAMAMEN GERİ ALINDI): İlk denemede
-     "position: sticky" + JS ile ölçülen --sabit-yukseklik/--baslik-
-     satiri-yukseklik değişkenleri kullanılmıştı. Canlı tarayıcıda
-     (Chromium 141, Playwright ile) test edilince şu kanıtlandı: bu tablo
-     .tablo-sarmalayici içinde ve o kutuda "overflow-x: auto" var --
-     CSS Overflow spesifikasyonu gereği bu, kutuyu position:sticky
-     elemanları için bir "scroll container" yapıyor, ve kutu KENDİSİ
-     bağımsız dikey kaydırma yapmadığından (sayfayla birlikte doğal
-     akışta kayıyor), İÇİNDEKİ sticky satırlar ASLA gerçekten yapışmıyor
-     -- ya sayfayla birlikte kayıp gözden kayboluyor (top:0 iken, fark
-     edilmesi zor) ya da (top sıfırdan büyükken, tam burada olduğu gibi)
-     veri satırlarının TAM ÜSTÜNE BİNİYOR ("1 kayıt var ama görünmüyor +
-     2 boş satır" hatası buradan geliyordu). "overflow-y: clip" ile bu
-     sorunu atlatmayı DENEDİK -- Chrome bunu "hidden" ile AYNI şekilde
-     ele alıyor (canlı testte doğrulandı), yani ÇÖZMEDİ. Güvenli ve
-     doğrulanmış çözüm: bu tablonun KENDİ başlığını sabitlemekten
-     TAMAMEN VAZGEÇMEK -- üst navigasyon/arama/kart barı (.sabit-ust,
-     .tablo-sarmalayici'nin DIŞINDA olduğu için bu sorundan etkilenmiyor)
-     hâlâ ekranda sabit kalıyor, sadece tablo başlığı artık NORMAL
-     (kaydırınca sayfayla birlikte kayan) bir başlık -- yıllardır
-     çalışan, basit ve güvenilir hali. */
+  /* TABLO BAŞLIĞINI SABİT (sticky) YAPMA -- ÜÇÜNCÜ deneme (2026-09-08),
+     bu kez ÇALIŞIYOR (canlı Playwright/Chromium testiyle doğrulandı).
+     İLK iki denemede .tablo-sarmalayici'de "overflow-x: auto" vardı (geniş
+     11 sütunlu tabloyu dar ekranda yatay kaydırmak için) -- CSS Overflow
+     spesifikasyonu gereği bu, kutuyu position:sticky torunları için bir
+     "scroll container" yapıyordu, ve kutu kendisi bağımsız kaymadığından
+     içindeki sticky thead satırları YA gözden kayboluyordu YA DA veri
+     satırlarının üstüne biniyordu ("1 kayıt var ama görünmüyor" hatası).
+     "overflow-y: clip" de bunu çözmüyordu (Chrome'da hidden ile aynı).
+     ÇÖZÜM: overflow-x:auto'yu TAMAMEN KALDIRDIK (tablo zaten normal
+     ekranlarda yatay kaydırmaya gerek kalmadan sığıyor -- çok dar bir
+     pencerede tablo taşarsa artık SAYFANIN KENDİSİ yatay kayar, bu kutu
+     değil). Böylece bu tablonun sticky thead'i, .sabit-ust ile AYNI
+     kaydırma bağlamını (viewport) paylaşıyor ve gerçekten çalışıyor.
+     --sabit-yukseklik / --baslik-satiri-yukseklik: .sabit-ust'un ve
+     başlık satırının o anki yüksekliği -- JS ile ölçülüp yazılıyor (bkz.
+     ORTAK_JS sabitBoyutlariGuncelle()), çünkü .sabit-ust'un yüksekliği
+     sabit bir sayı değil (uyarı şeridi çıkıp/kaybolabiliyor, ekran
+     genişliğine göre sarabiliyor). */
+  :root { --sabit-yukseklik: 0px; --baslik-satiri-yukseklik: 0px; }
   thead tr.baslik-satiri th {
     background: #041e42; color: #fff; cursor: pointer; user-select: none;
+    position: sticky; top: var(--sabit-yukseklik); z-index: 20;
   }
   thead tr.baslik-satiri th:hover { background: #0a2d5e; }
   thead tr.baslik-satiri th::after { content: " ⇅"; opacity: 0.5; font-size: 11px; }
@@ -669,6 +675,7 @@ ORTAK_STIL = """
   thead tr.baslik-satiri th[data-siralama="azalan"]::after { content: " ▼"; opacity: 1; }
   thead tr.filtre-satiri th {
     background: #f3f4f6; padding: 4px 6px; cursor: default;
+    position: sticky; top: calc(var(--sabit-yukseklik) + var(--baslik-satiri-yukseklik)); z-index: 20;
   }
   thead tr.filtre-satiri th::after { content: ""; }
 
@@ -717,6 +724,17 @@ ORTAK_STIL = """
   tbody tr.bos-satiri:hover { background: inherit; }
   td a { color: #2563eb; text-decoration: none; }
   td a:hover { text-decoration: underline; }
+
+  /* Sayfalama (2026-09-08: "500'den fazla gösterilmesin diye bir kısıt
+     olmasın, gerekirse birden fazla sayfa olsun" diye eklendi -- artık
+     500'den fazla sonuç SESSİZCE kesilmiyor, 500'er 500'er sayfalanıyor). */
+  .sayfalama {
+    display: flex; align-items: center; gap: 10px; justify-content: center;
+    margin-top: 14px; font-size: 13px; color: #4b5563;
+  }
+  .sayfalama a.buton-ikincil.sf-pasif {
+    opacity: 0.4; pointer-events: none;
+  }
 
   .not-bulundu { color: #b91c1c; }
   .bilgi-notu { color: #6b7280; font-size: 12px; }
@@ -1085,12 +1103,37 @@ function _veriCekDurumGuncelle() {
       kutu.textContent = 'Tamamlandı (' + d.bitis_zamani + '): ' + d.eklenen + ' eklendi, ' + d.atlanan + ' atlandı' +
         (d.basarisiz_parca ? ', ' + d.basarisiz_parca + ' parça başarısız' : '') + '.';
     }
+    // Metin değişince (örn. "Çekiliyor..." <-> "Tamamlandı...") satır
+    // sayısı/yüksekliği değişebilir -- sticky tablo başlığının offset'i
+    // bayatlamasın diye yeniden ölçüyoruz.
+    sabitBoyutlariGuncelle();
   }).catch(function () {});
+}
+
+// ------------------------------------------------------------------
+// Tablo başlığını (.sabit-ust'un HEMEN ALTINA) sabit/sticky yapabilmek
+// için .sabit-ust'un VE başlık satırının o anki yüksekliğini ölçüp CSS
+// değişkenlerine yazar (bkz. ORTAK_STIL'deki --sabit-yukseklik notu).
+// Sayfada .sabit-ust YOKSA (örn. detay sayfası) SESSİZCE hiçbir şey
+// yapmaz -- CSS değişkenleri 0px kalır.
+// ------------------------------------------------------------------
+function sabitBoyutlariGuncelle() {
+  var sabitUst = document.querySelector('.sabit-ust');
+  if (!sabitUst) return;
+  document.documentElement.style.setProperty('--sabit-yukseklik', sabitUst.offsetHeight + 'px');
+
+  var baslikSatiri = document.querySelector('thead tr.baslik-satiri');
+  if (baslikSatiri) {
+    document.documentElement.style.setProperty('--baslik-satiri-yukseklik', baslikSatiri.offsetHeight + 'px');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', function () {
   _veriCekDurumGuncelle();
+  sabitBoyutlariGuncelle();
 });
+window.addEventListener('load', sabitBoyutlariGuncelle);
+window.addEventListener('resize', sabitBoyutlariGuncelle);
 </script>
 """
 
@@ -1183,32 +1226,33 @@ ANA_SAYFA = """
   </div>
 
   <div class="arama-kartlari">
-    <!-- TEK kutu, TEK form, TEK SATIR (2026-09-08, üçüncü sürüm: önceki
-         hal -- Ara/Model-Renk-Yakıt/Tarih/Ara-Temizle diye üst üste dört
-         satır -- "sayfanın yarısından fazlasını kaplıyor, dağınık, çorba
-         gibi" diye beğenilmedi; hepsi TEK satıra indirildi, aralarda
-         çizgi/bölüm yok, sadece küçük etiketli gruplar yan yana). Şase/
-         motor/model/renk/plaka/fatura no metin araması, Model/Dış Renk/
-         Yakıt Tipi comboboxları, tarih aralığı VE hızlı tarih seçimi
-         hepsi AYNI formda -- TEK "Ara" butonu hangi alan(lar) doluysa
-         onunla arar, yanındaki "Temizle" linki tüm alanları sıfırlayıp
-         "/" adresine (varsayılan görünüme) döner.
-         ÖNCELİK SIRASI (anasayfa() route'undaki mantıkla BİREBİR aynı --
-         bkz. oradaki docstring): combobox seçimi varsa ONA göre arar,
-         yoksa metin araması varsa ONA göre arar, o da yoksa tarih
-         aralığına göre arar. Aynı anda birden fazlası doldurulursa
-         hepsi BİRLİKTE (VE mantığıyla) BİRLEŞTİRİLMİYOR -- bu öncelik
-         sırasındaki İLK doluyu kullanır. -->
+    <!-- TEK kutu, TEK form, TEK SATIR. Şase/motor/model/renk/plaka/fatura
+         no metin araması, Model/Dış Renk/Yakıt Tipi comboboxları, tarih
+         aralığı VE hızlı tarih seçimi hepsi AYNI formda -- TEK "Ara"
+         butonu hangi alan(lar) doluysa hepsini BİRLİKTE (VE mantığıyla)
+         uygular (bkz. anasayfa() route'undaki güncel docstring -- Ara
+         butonu artık hiçbir filtreye "takılıp" diğerlerini yok saymıyor),
+         yanındaki "Temizle" linki tüm alanları sıfırlayıp "/" adresine
+         (varsayılan görünüme) döner.
+         "Ara / Filtrele" başlığı KALDIRILDI (2026-09-08: kutuyu
+         gereksiz yere yükseltiyordu).
+         MODEL SEÇİMİ (il-ilçe mantığı): model select'in onchange'i formu
+         OTOMATİK gönderir -- sayfa yeniden yüklenince Dış Renk/Yakıt Tipi
+         seçenekleri SUNUCU tarafında o modele göre daraltılmış olarak
+         gelir (bkz. RENK_SECENEKLERI_SORGUSU/YAKIT_SECENEKLERI_SORGUSU).
+         HIZLI TARİH: hem açılır liste hem YANINDA aynı işi yapan butonlar
+         var (2026-09-08: "combobox güzel olmuş ama buton seçimlerini de
+         istiyorum" diye ikisi BİRLİKTE bırakıldı) -- ikisi de aynı
+         tarihAyarla() fonksiyonunu çağırıp formu gönderiyor. -->
     <form class="arama-formu arama-formu-birlesik" method="get" id="tarih-arama-formu">
-      <b>Ara / Filtrele</b>
       <div class="arama-tek-satir">
         <div class="arama-grup arama-grup-genel">
           <label>Ne arıyorsun</label>
-          <input type="text" name="q" value="{{ arama_metni }}" placeholder="şase, motor no, model, renk, plaka, fatura no...">
+          <input type="text" name="q" value="{{ arama_metni }}" placeholder="şase, motor no, plaka, fatura no...">
         </div>
         <div class="arama-grup">
           <label>Model</label>
-          <select name="model">
+          <select name="model" onchange="this.form.submit()">
             <option value="">Tümü</option>
             {% for m in model_secenekleri %}
             <option value="{{ m }}" {{ "selected" if model_secili == m else "" }}>{{ m }}</option>
@@ -1257,6 +1301,17 @@ ANA_SAYFA = """
             <option value="bu-yil">Bu Yıl</option>
           </select>
         </div>
+        <div class="arama-grup">
+          <label>&nbsp;</label>
+          <div class="arama-hizli-tarih-butonlar">
+            <button type="button" class="buton-ikincil" onclick="tarihAyarla('bugun')">Bugün</button>
+            <button type="button" class="buton-ikincil" onclick="tarihAyarla('dun')">Dün</button>
+            <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-hafta')">Bu Hafta</button>
+            <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-ay')">Bu Ay</button>
+            <button type="button" class="buton-ikincil" onclick="tarihAyarla('gecen-ay')">Geçen Ay</button>
+            <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-yil')">Bu Yıl</button>
+          </div>
+        </div>
         <button type="submit">Ara</button>
         <a href="/" class="buton-ikincil buton-link">Temizle</a>
       </div>
@@ -1268,8 +1323,7 @@ ANA_SAYFA = """
 
 <div class="icerik-alt">
 
-  <h2>{{ baslik_metni }} ({{ sonuclar|length }} kayıt{{ ", en fazla 500 gösteriliyor" if sonuclar|length >= 500 else "" }})</h2>
-  <p class="bilgi-notu">Bir satıra tıklayınca o aracın tüm detayları (özellikler, faturalar, gümrük bilgisi) küçük, ayrı bir PENCEREDE açılır -- bu sayfa olduğu gibi kalır.</p>
+  <h2>{{ baslik_metni }} ({{ toplam_kayit }} kayıt{{ ", sayfa %d / %d"|format(sayfa, toplam_sayfa) if toplam_sayfa > 1 else "" }})</h2>
 
   <div class="tablo-sarmalayici">
   <table id="tablo-sonuclar">
@@ -1323,6 +1377,16 @@ ANA_SAYFA = """
   </table>
   </div>
 
+  {% if toplam_sayfa > 1 %}
+  <div class="sayfalama">
+    <a class="buton-ikincil {{ 'sf-pasif' if sayfa <= 1 else '' }}"
+       href="/?{{ sayfalama_taban_qs }}{{ '&' if sayfalama_taban_qs else '' }}sayfa={{ sayfa - 1 }}">&larr; Önceki</a>
+    <span>Sayfa {{ sayfa }} / {{ toplam_sayfa }} ({{ toplam_kayit }} kayıt)</span>
+    <a class="buton-ikincil {{ 'sf-pasif' if sayfa >= toplam_sayfa else '' }}"
+       href="/?{{ sayfalama_taban_qs }}{{ '&' if sayfalama_taban_qs else '' }}sayfa={{ sayfa + 1 }}">Sonraki &rarr;</a>
+  </div>
+  {% endif %}
+
 </div>
 """ + ORTAK_JS + """
 </body>
@@ -1332,9 +1396,11 @@ ANA_SAYFA = """
 
 # ------------------------------------------------------------------
 # Detay sayfası şablonu -- "/arac/<sasi_no>" (ORTAK_JS'i kullanır ama
-# .sabit-ust'u YOK -- bu sayfada sticky üst bar/veri çek yok. Tablo
-# başlıkları zaten HİÇBİR sayfada sabit değil, bkz. ORTAK_STIL'deki
-# thead notu.)
+# .sabit-ust'u YOK -- bu sayfada sticky üst bar/veri çek yok. Fatura/gümrük
+# tablolarının KENDİ başlıkları yine de sticky (top: 0) olur -- bu sayfada
+# .sabit-ust olmadığından --sabit-yukseklik hep 0px kalır, bu da "bu küçük
+# popup penceresinin en üstüne yapış" anlamına gelir, zararsız/faydalı bir
+# yan etki. Bkz. ORTAK_STIL'deki thead sticky notu.)
 # ------------------------------------------------------------------
 DETAY_SAYFA = """
 <!doctype html>
@@ -1461,25 +1527,25 @@ DETAY_SAYFA = """
 def anasayfa():
     """Ana sayfa: 8 tıklanabilir özet kartı + TEK bir arama/filtre formu
     (genel arama + Model/Dış Renk/Yakıt Tipi comboboxları + tarih aralığı,
-    hepsi AYNI form/TEK "Ara" butonu -- 2026-09-08: eskiden ayrı ayrı
-    formlardı, "hepsinde ayrı buton olmasına gerek yok" diyerek
-    birleştirildi) -- hepsi AYNI özet liste tablosunu doldurur.
+    hepsi AYNI form/TEK "Ara" butonu) -- hepsi AYNI özet liste tablosunu
+    doldurur.
 
-    ÖNCELİK SIRASI (hangi arama önce kontrol edilir -- form TEK olduğu
-    için birden fazla alan AYNI ANDA dolu gelebilir, bu durumda hepsi
-    BİRLİKTE birleştirilmiyor, bu sıradaki İLK dolu olan kullanılıyor):
-      1) ?gorunum=tum       -> tüm araçlar (Toplam Araç kartı)
-      2) ?gorunum=ithal     -> gümrük kaydı olan araçlar (o kart)
-      3) ?model=/?renk=/?yakit= (herhangi biri doluysa) -> Model/Dış
-                               Renk/Yakıt Tipi comboboxlarına göre filtre
-      4) ?q=...             -> genel arama (şase/motor/model/renk/plaka/fatura)
-      5) ?baslangic=&bitis= -> tarih aralığı (diğer 6 kart da buraya düşer)
-      6) hiçbiri yoksa      -> varsayılan: bu ayı otomatik göster
+    FİLTRE MANTIĞI (2026-09-08, İKİNCİ sürüm): eskiden bir ÖNCELİK
+    SIRASI vardı ("model seçiliyse SADECE ona göre ara, metin/tarih YOK
+    SAYILIR" gibi) -- kullanıcı "Ara butonu hiç bir filtreye takılmamalı,
+    tarih filitreleri bağımsız olmalı" diye haklı olarak şikayet etti.
+    ŞİMDİ: ?gorunum=tum ve ?gorunum=ithal (özet kartlarından gelen özel
+    görünümler) hâlâ kendi başına, ama geri kalan HER ŞEY (metin, model,
+    dış renk, yakıt tipi, tarih aralığı) TEK sorguda VE (AND) mantığıyla
+    BİRLİKTE uygulanıyor -- doldurulan alanlar birlikte daraltır, boş
+    alan hiç filtre uygulamamış gibi davranır (bkz. BIRLESIK_ARAMA_GOVDESI
+    yorumu). Hiçbir alan doldurulmamışsa (ve gorunum da yoksa) varsayılan
+    olarak İÇİNDE BULUNULAN AY gösterilir.
 
-    ÖĞRENME NOTU (varsayılan tarih): Tarih kutuları hiçbir zaman boş
-    görünmesin diye (ve sayfa ilk açıldığında hemen işe yarasın diye)
-    parametre hiç verilmemişse varsayılan olarak İÇİNDE BULUNULAN AYIN
-    ilk günü / son günü kullanılıyor."""
+    SAYFALAMA (2026-09-08): sonuçlar artık 500'de SESSİZCE kesilmiyor --
+    ?sayfa=N ile 500'er 500'er sayfalara bölünüyor (bkz. SAYFA_BOYUTU),
+    toplam kayıt sayısına göre "Sayfa X / Y" + Önceki/Sonraki linkleri
+    tabloların altında gösteriliyor."""
     bugun = dt.date.today()
     dun = bugun - dt.timedelta(days=1)
     hafta_baslangic = bugun - dt.timedelta(days=bugun.weekday())  # Pazartesi
@@ -1531,21 +1597,49 @@ def anasayfa():
     # {% if veri_cek_hata %} bloğu).
     veri_cek_hata = request.args.get("veri_cek_hata", "").strip()
 
+    # Hangi sayfadayız (1'den başlar, geçersiz/eksik değer sessizce 1'e
+    # düşer) -- bkz. modül üstündeki SAYFA_BOYUTU.
+    try:
+        sayfa = max(1, int(request.args.get("sayfa", "1")))
+    except ValueError:
+        sayfa = 1
+    sayfa_offset = (sayfa - 1) * SAYFA_BOYUTU
+
     # Model/Dış Renk/Yakıt Tipi comboboxlarını dolduracak benzersiz
     # değerler -- HER istekte çekiliyor (sayfa yenilendiğinde combobox
     # seçenekleri güncel kalsın diye), veri az olduğu için (birkaç bin
-    # araç) performans sorunu yaratmaz.
+    # araç) performans sorunu yaratmaz. "İl seçince ilçe ona göre dolsun"
+    # mantığı: model_secili doluysa Dış Renk/Yakıt Tipi seçenekleri SADECE
+    # o modelde var olan değerlerle sınırlanıyor (bkz. sorgulardaki not).
     model_secenekleri = [r["deger"] for r in _sorgu_calistir(MODEL_SECENEKLERI_SORGUSU, [])]
-    renk_secenekleri = [r["deger"] for r in _sorgu_calistir(RENK_SECENEKLERI_SORGUSU, [])]
-    yakit_secenekleri = [r["deger"] for r in _sorgu_calistir(YAKIT_SECENEKLERI_SORGUSU, [])]
+    renk_secenekleri = [r["deger"] for r in _sorgu_calistir(
+        RENK_SECENEKLERI_SORGUSU, [model_secili, model_secili]
+    )]
+    yakit_secenekleri = [r["deger"] for r in _sorgu_calistir(
+        YAKIT_SECENEKLERI_SORGUSU, [model_secili, model_secili]
+    )]
     # "Tanımsız" (yakit_id NULL -- motor_no'dan tahmin edilemeyen) araç
     # sayısı -- 0 ise combobox'ta bu seçenek hiç gösterilmiyor (bkz. ANA_SAYFA).
     yakit_tanimsiz_sayisi = _sorgu_calistir(YAKIT_TANIMSIZ_SAYISI_SORGUSU, [])[0]["sayi"]
 
-    hicbir_parametre_yok = (
-        not arama_metni and not baslangic_deger and not bitis_deger
-        and not gorunum
-        and not model_secili and not renk_secili and not yakit_secili
+    # Tarih aralığı SADECE hem başlangıç hem bitiş geçerli bir tarihse
+    # "aktif" sayılır -- geçersiz/eksikse filtre uygulanmaz (sessizce boş
+    # sonuç göstermek yerine, artık diğer alanlarla birlikte çalışabilsin
+    # diye eskisi gibi tüm aramayı iptal etmiyoruz).
+    tarih_filtresi_var = False
+    tarih_bas_sql = dt.date(1900, 1, 1)
+    tarih_bit_sql = dt.date(2100, 1, 1)
+    if baslangic_deger and bitis_deger:
+        try:
+            tarih_bas_sql = dt.datetime.strptime(baslangic_deger, "%Y-%m-%d").date()
+            tarih_bit_sql = dt.datetime.strptime(bitis_deger, "%Y-%m-%d").date()
+            tarih_filtresi_var = True
+        except ValueError:
+            tarih_bas_sql = dt.date(1900, 1, 1)
+            tarih_bit_sql = dt.date(2100, 1, 1)
+
+    herhangi_bir_alan_dolu = bool(
+        arama_metni or model_secili or renk_secili or yakit_secili or tarih_filtresi_var
     )
 
     # Tarih kutucukları HER ZAMAN dolu görünsün -- kullanıcı henüz kendi
@@ -1559,27 +1653,39 @@ def anasayfa():
         bitis_gosterim = bitis_deger
 
     sonuclar = []
+    toplam_kayit = 0
     arama_yapildi = False
     baslik_metni = "Araç listesi"
 
     if gorunum == "tum":
         arama_yapildi = True
-        sonuclar = _sorgu_calistir(TUM_ARACLAR_SORGUSU, [])
+        sonuclar = _sorgu_calistir(TUM_ARACLAR_SORGUSU, [SAYFA_BOYUTU, sayfa_offset])
+        toplam_kayit = _sorgu_calistir(TUM_ARACLAR_SAYISI_SORGUSU, [])[0]["sayi"]
         baslik_metni = "Tüm araçlar"
     elif gorunum == "ithal":
         arama_yapildi = True
-        sonuclar = _sorgu_calistir(ITHAL_ARACLAR_SORGUSU, [])
+        sonuclar = _sorgu_calistir(ITHAL_ARACLAR_SORGUSU, [SAYFA_BOYUTU, sayfa_offset])
+        toplam_kayit = _sorgu_calistir(ITHAL_ARACLAR_SAYISI_SORGUSU, [])[0]["sayi"]
         baslik_metni = "Gümrük kaydı olan araçlar"
-    elif model_secili or renk_secili or yakit_secili:
+    elif herhangi_bir_alan_dolu:
+        # Metin, model, dış renk, yakıt tipi ve tarih aralığı -- hangileri
+        # doluysa hepsi BİRLİKTE (VE mantığıyla) uygulanıyor (bkz.
+        # BIRLESIK_ARAMA_GOVDESI'nin üstündeki yorum). Ara butonu ve tarih
+        # filtresi artık başka bir filtreye "takılıp" yok sayılmıyor.
         arama_yapildi = True
-        # NOT: yakit_secili ÜÇ KERE veriliyor -- FILTRE_SORGUSU'ndaki yakıt
-        # koşulunda üç %s var (boş mu / "Tanımsız" mı / gerçek isme eşit mi,
-        # bkz. FILTRE_SORGUSU'nun üstündeki yorum).
-        sonuclar = _sorgu_calistir(FILTRE_SORGUSU, [
+        joker = "%" + arama_metni + "%"
+        govde_parametreleri = [
             model_secili, model_secili,
             renk_secili, renk_secili,
             yakit_secili, yakit_secili, yakit_secili,
-        ])
+            arama_metni, joker, joker, joker, joker, joker, joker, joker,
+            not tarih_filtresi_var, tarih_bas_sql, tarih_bit_sql,
+        ]
+        sonuclar = _sorgu_calistir(
+            BIRLESIK_ARAMA_SORGUSU, govde_parametreleri + [SAYFA_BOYUTU, sayfa_offset]
+        )
+        toplam_kayit = _sorgu_calistir(BIRLESIK_ARAMA_SAYISI_SORGUSU, govde_parametreleri)[0]["sayi"]
+
         parcalar = []
         if model_secili:
             parcalar.append("Model: %s" % model_secili)
@@ -1589,27 +1695,50 @@ def anasayfa():
             parcalar.append("Yakıt: Tanımsız")
         elif yakit_secili:
             parcalar.append("Yakıt: %s" % yakit_secili)
-        baslik_metni = "Filtre sonucu (%s)" % ", ".join(parcalar) if parcalar else "Tüm araçlar"
-    elif arama_metni:
+        if arama_metni:
+            parcalar.append('"%s"' % arama_metni)
+        if tarih_filtresi_var:
+            parcalar.append("%s - %s arası" % (baslangic_deger, bitis_deger))
+        baslik_metni = "Arama sonucu (%s)" % ", ".join(parcalar) if parcalar else "Araç listesi"
+    else:
+        # Hiçbir alan doldurulmamış: sayfa ilk açıldığında otomatik olarak
+        # BU AYI göster (boş "araç listesi" yerine hemen işe yarar bir
+        # görünüm) -- bu da aynı birleşik sorgudan geçiyor, sadece tarih
+        # aralığı Python tarafından "bu ay" olarak dolduruluyor.
         arama_yapildi = True
-        joker = "%" + arama_metni + "%"
-        sonuclar = _sorgu_calistir(GENEL_ARAMA_SORGUSU, [joker] * 7)
-        baslik_metni = '"%s" için arama sonucu' % arama_metni
-    elif baslangic_deger and bitis_deger:
-        try:
-            b = dt.datetime.strptime(baslangic_deger, "%Y-%m-%d").date()
-            e = dt.datetime.strptime(bitis_deger, "%Y-%m-%d").date()
-            arama_yapildi = True
-            sonuclar = _sorgu_calistir(TARIH_LISTESI_SORGUSU, [b, e])
-            baslik_metni = "%s - %s arası" % (baslangic_deger, bitis_deger)
-        except ValueError:
-            pass  # geçersiz tarih girildiyse sessizce boş sonuç göster
-    elif hicbir_parametre_yok:
-        # Sayfa hiç parametresiz ilk açıldığında: otomatik olarak BU AYI
-        # göster (boş "araç listesi" yerine hemen işe yarar bir görünüm).
-        arama_yapildi = True
-        sonuclar = _sorgu_calistir(TARIH_LISTESI_SORGUSU, [ay_baslangic, ay_bitis])
+        joker = "%%"
+        govde_parametreleri = [
+            "", "", "", "", "", "", "",
+            "", joker, joker, joker, joker, joker, joker, joker,
+            False, ay_baslangic, ay_bitis,
+        ]
+        sonuclar = _sorgu_calistir(
+            BIRLESIK_ARAMA_SORGUSU, govde_parametreleri + [SAYFA_BOYUTU, sayfa_offset]
+        )
+        toplam_kayit = _sorgu_calistir(BIRLESIK_ARAMA_SAYISI_SORGUSU, govde_parametreleri)[0]["sayi"]
         baslik_metni = "Bu ay"
+
+    # Sayfalama: mevcut filtreleri (sayfa numarası HARİÇ) query string'e
+    # çevirip Önceki/Sonraki linklerinin altına ekliyoruz -- bkz. ANA_SAYFA
+    # şablonundaki sayfalama bloğu.
+    toplam_sayfa = max(1, -(-toplam_kayit // SAYFA_BOYUTU))  # yukarı yuvarlama
+    sayfa = min(sayfa, toplam_sayfa)
+    mevcut_parametreler = {}
+    if gorunum:
+        mevcut_parametreler["gorunum"] = gorunum
+    if arama_metni:
+        mevcut_parametreler["q"] = arama_metni
+    if model_secili:
+        mevcut_parametreler["model"] = model_secili
+    if renk_secili:
+        mevcut_parametreler["renk"] = renk_secili
+    if yakit_secili:
+        mevcut_parametreler["yakit"] = yakit_secili
+    if baslangic_deger:
+        mevcut_parametreler["baslangic"] = baslangic_deger
+    if bitis_deger:
+        mevcut_parametreler["bitis"] = bitis_deger
+    sayfalama_taban_qs = urlencode(mevcut_parametreler)
 
     return render_template_string(
         ANA_SAYFA,
@@ -1621,6 +1750,10 @@ def anasayfa():
         sonuclar=sonuclar,
         arama_yapildi=arama_yapildi,
         baslik_metni=baslik_metni,
+        toplam_kayit=toplam_kayit,
+        sayfa=sayfa,
+        toplam_sayfa=toplam_sayfa,
+        sayfalama_taban_qs=sayfalama_taban_qs,
         model_secenekleri=model_secenekleri,
         renk_secenekleri=renk_secenekleri,
         yakit_secenekleri=yakit_secenekleri,
