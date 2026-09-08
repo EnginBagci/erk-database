@@ -557,6 +557,17 @@ ORTAK_STIL = """
   .kart.mor .sayi { color: #7c3aed; }
 
   h2 { font-size: 15px; margin: 10px 0 4px; color: #111827; }
+  /* Sonuç başlığı ("Bu ay (40 kayıt)" gibi) -- 2026-09-08: "filitre
+     kısmındaki not araya giriyor aşağı inerken sabit kalmıyor oda sabit
+     kalsın" diye bu da .sabit-ust ile TABLONUN sticky thead'i ARASINDA
+     kendi katmanı olarak sabitlendi (sticky yığını: .sabit-ust -> bu ->
+     thead). Arka planı sayfayla AYNI (#eef1f5) olmalı, yoksa altından
+     kayan tablo satırları şeffaf üstten görünür -- z-index, .sabit-ust'un
+     (300) altında ama thead'in (20) üstünde. */
+  .sonuc-basligi {
+    position: sticky; top: var(--sabit-yukseklik); z-index: 250;
+    background: #eef1f5; padding: 4px 0;
+  }
   .arama-kartlari { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 0; align-items: flex-start; }
   form.arama-formu {
     background: #fff;
@@ -602,12 +613,12 @@ ORTAK_STIL = """
     font-size: 10px; font-weight: 700; color: #6b7280; text-transform: uppercase;
     letter-spacing: 0.02em;
   }
-  /* Genel arama kutusu (2026-09-08: "ara çubuğunu kısaltıp hızlı tarihin
-     yanına hızlı tarih butonlarını ekleyelim" diye KISALTILDI -- artık
-     kalan boşluğu doldurmak için BÜYÜMÜYOR (flex-grow: 0), sabit/küçük
-     bir genişlikte duruyor ki hızlı tarih butonlarına TEK satırda yer
-     kalsın). */
-  .arama-grup-genel { flex: 0 0 170px; }
+  /* Genel arama kutusu -- önce (2026-09-08 sabah) "ara çubuğunu kısaltıp
+     hızlı tarihin yanına hızlı tarih butonlarını ekleyelim" diye 170px'e
+     KISALTILDI, sonra AYNI GÜN "ne arıyorsun arama çubuğunun boyunu 2 kat
+     artıralım" diye 340px'e (2x) BÜYÜTÜLDÜ. flex-grow hâlâ 0 -- kalan
+     boşluğu doldurmak için büyümüyor, sabit genişlikte duruyor. */
+  .arama-grup-genel { flex: 0 0 340px; }
   .arama-grup-genel input[type=text] { width: 100%; }
   .arama-grup select { width: 112px; }
   .arama-grup input[type=date] { width: 126px; }
@@ -664,10 +675,14 @@ ORTAK_STIL = """
      ORTAK_JS sabitBoyutlariGuncelle()), çünkü .sabit-ust'un yüksekliği
      sabit bir sayı değil (uyarı şeridi çıkıp/kaybolabiliyor, ekran
      genişliğine göre sarabiliyor). */
-  :root { --sabit-yukseklik: 0px; --baslik-satiri-yukseklik: 0px; }
+  :root {
+    --sabit-yukseklik: 0px;
+    --baslik-metni-yukseklik: 0px;
+    --baslik-satiri-yukseklik: 0px;
+  }
   thead tr.baslik-satiri th {
     background: #041e42; color: #fff; cursor: pointer; user-select: none;
-    position: sticky; top: var(--sabit-yukseklik); z-index: 20;
+    position: sticky; top: calc(var(--sabit-yukseklik) + var(--baslik-metni-yukseklik)); z-index: 20;
   }
   thead tr.baslik-satiri th:hover { background: #0a2d5e; }
   thead tr.baslik-satiri th::after { content: " ⇅"; opacity: 0.5; font-size: 11px; }
@@ -675,7 +690,9 @@ ORTAK_STIL = """
   thead tr.baslik-satiri th[data-siralama="azalan"]::after { content: " ▼"; opacity: 1; }
   thead tr.filtre-satiri th {
     background: #f3f4f6; padding: 4px 6px; cursor: default;
-    position: sticky; top: calc(var(--sabit-yukseklik) + var(--baslik-satiri-yukseklik)); z-index: 20;
+    position: sticky;
+    top: calc(var(--sabit-yukseklik) + var(--baslik-metni-yukseklik) + var(--baslik-satiri-yukseklik));
+    z-index: 20;
   }
   thead tr.filtre-satiri th::after { content: ""; }
 
@@ -850,8 +867,64 @@ function tarihAyarla(tur) {
 
   document.getElementById('baslangic-girdi').value = baslangic;
   document.getElementById('bitis-girdi').value = bitis;
-  document.getElementById('tarih-arama-formu').submit();
+  // Kullanıcı GERÇEKTEN bir tarih seçti -- submit listener'ı bu kutuları
+  // boşaltmasın (bkz. tarihDokunulduAyarla() / tarih-arama-formu submit
+  // dinleyicisi).
+  tarihDokunulduAyarla(true);
+  document.getElementById('tarih-arama-formu').requestSubmit();
 }
+
+// ------------------------------------------------------------------
+// TARİH KUTULARI "GÖRÜNÜŞTE DOLU AMA KULLANICI DOKUNMADI" HATASI (2026-
+// 09-08'de bulundu): Başlangıç/Bitiş kutuları kullanıcı hiç dokunmasa
+// bile HER ZAMAN "bu ayın tarihleri" ile dolu görünüyor (bkz. Python
+// tarafındaki baslangic_gosterim/bitis_gosterim). Bu SADECE görsel bir
+// kolaylık olması gerekiyordu ama kutular AYNI ZAMANDA formun gerçek
+// <input name="baslangic">/<input name="bitis"> alanları -- yani kullanıcı
+// sadece Model seçince (ya da Ara'ya basınca) form gönderildiğinde, bu
+// "bu ay" tarihleri SESSİZCE tarih filtresi olarak da gönderiliyordu.
+// Sonuç: "Model seçtim ama sonuçlar yanlış/eksik" şikayeti -- aslında
+// hem Model HEM DE görünmeyen bir "bu ay" filtresi BİRLİKTE uygulanıyordu.
+//
+// ÇÖZÜM: tarihDokunuldu bayrağı -- kullanıcı tarih kutularına GERÇEKTEN
+// dokunduysa (yazı girdi, hızlı tarih butonu/listesi kullandı) true olur.
+// Form gönderilirken (submit event -- Ara butonu, Enter, ya da JS'teki
+// requestSubmit() çağrıları) bayrak HÂLÂ false ise, kutular submit anında
+// (tarayıcı query string'i oluşturmadan hemen önce) boşaltılıyor -- böylece
+// "görünüşte dolu" tarih artık arama mantığını etkilemiyor, sadece
+// kullanıcıya bilgi veriyor (sunucu tarafında da zaten böyle
+// yorumlanıyordu, ama form HTML'i bunu GERÇEKTEN sağlamıyordu).
+// ------------------------------------------------------------------
+var tarihDokunuldu = false;
+
+function tarihDokunulduAyarla(deger) {
+  tarihDokunuldu = deger;
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  var form = document.getElementById('tarih-arama-formu');
+  if (!form) return;
+
+  // Sayfa, kullanıcının GERÇEKTEN seçtiği bir tarih aralığıyla mı açıldı
+  // (örn. bir arama sonucunu yeniledi/sayfaladı) -- öyleyse kutular zaten
+  // "dokunulmuş" sayılmalı, yoksa bir sonraki Model/Renk/Yakıt seçiminde
+  // kullanıcının kendi seçtiği tarih aralığı YANLIŞLIKLA silinirdi.
+  tarihDokunuldu = form.getAttribute('data-tarih-kullanici-secti') === '1';
+
+  var baslangicKutu = document.getElementById('baslangic-girdi');
+  var bitisKutu = document.getElementById('bitis-girdi');
+  ['input', 'change'].forEach(function (olay) {
+    if (baslangicKutu) baslangicKutu.addEventListener(olay, function () { tarihDokunulduAyarla(true); });
+    if (bitisKutu) bitisKutu.addEventListener(olay, function () { tarihDokunulduAyarla(true); });
+  });
+
+  form.addEventListener('submit', function () {
+    if (!tarihDokunuldu) {
+      if (baslangicKutu) baslangicKutu.value = '';
+      if (bitisKutu) bitisKutu.value = '';
+    }
+  });
+});
 
 // ------------------------------------------------------------------
 // Sütun bazlı "Excel benzeri" çoklu-seçim filtre (2026-09-08 eklendi)
@@ -1122,6 +1195,16 @@ function sabitBoyutlariGuncelle() {
   if (!sabitUst) return;
   document.documentElement.style.setProperty('--sabit-yukseklik', sabitUst.offsetHeight + 'px');
 
+  // Sonuç başlığı ("Bu ay (40 kayıt)") -- 2026-09-08: bu da sticky yığınına
+  // eklendi (.sabit-ust -> bu -> thead), o yüzden yüksekliği de ölçülüp
+  // thead'in top offset'ine eklenmesi gerekiyor (bkz. ORTAK_STIL).
+  var baslikMetni = document.querySelector('.sonuc-basligi');
+  if (baslikMetni) {
+    document.documentElement.style.setProperty('--baslik-metni-yukseklik', baslikMetni.offsetHeight + 'px');
+  } else {
+    document.documentElement.style.setProperty('--baslik-metni-yukseklik', '0px');
+  }
+
   var baslikSatiri = document.querySelector('thead tr.baslik-satiri');
   if (baslikSatiri) {
     document.documentElement.style.setProperty('--baslik-satiri-yukseklik', baslikSatiri.offsetHeight + 'px');
@@ -1236,15 +1319,23 @@ ANA_SAYFA = """
          (varsayılan görünüme) döner.
          "Ara / Filtrele" başlığı KALDIRILDI (2026-09-08: kutuyu
          gereksiz yere yükseltiyordu).
-         MODEL SEÇİMİ (il-ilçe mantığı): model select'in onchange'i formu
-         OTOMATİK gönderir -- sayfa yeniden yüklenince Dış Renk/Yakıt Tipi
+         MODEL/RENK/YAKIT SEÇİMİ (il-ilçe mantığı): üçünün de onchange'i
+         formu OTOMATİK gönderir (2026-09-08: "renk kısmı yakıt kısmı ...
+         çalışmıyor" -- kullanıcı seçince HİÇBİR ŞEY olmuyordu çünkü sadece
+         Model'de otomatik gönderim vardı; artık üçü de TUTARLI). Model
+         değiştiğinde sayfa yeniden yüklenince Dış Renk/Yakıt Tipi
          seçenekleri SUNUCU tarafında o modele göre daraltılmış olarak
          gelir (bkz. RENK_SECENEKLERI_SORGUSU/YAKIT_SECENEKLERI_SORGUSU).
+         NOT: .submit() DEĞİL .requestSubmit() kullanıyoruz -- ilki formun
+         "submit" event'ini TETİKLEMEZ (bkz. ORTAK_JS'teki tarih-arama-formu
+         submit listener'ı -- dokunulmamış tarih kutularını temizleyen kod,
+         event tetiklenmezse hiç çalışmazdı).
          HIZLI TARİH: hem açılır liste hem YANINDA aynı işi yapan butonlar
          var (2026-09-08: "combobox güzel olmuş ama buton seçimlerini de
          istiyorum" diye ikisi BİRLİKTE bırakıldı) -- ikisi de aynı
          tarihAyarla() fonksiyonunu çağırıp formu gönderiyor. -->
-    <form class="arama-formu arama-formu-birlesik" method="get" id="tarih-arama-formu">
+    <form class="arama-formu arama-formu-birlesik" method="get" id="tarih-arama-formu"
+          data-tarih-kullanici-secti="{{ '1' if tarih_kullanici_secti else '0' }}">
       <div class="arama-tek-satir">
         <div class="arama-grup arama-grup-genel">
           <label>Ne arıyorsun</label>
@@ -1252,7 +1343,7 @@ ANA_SAYFA = """
         </div>
         <div class="arama-grup">
           <label>Model</label>
-          <select name="model" onchange="this.form.submit()">
+          <select name="model" onchange="this.form.requestSubmit()">
             <option value="">Tümü</option>
             {% for m in model_secenekleri %}
             <option value="{{ m }}" {{ "selected" if model_secili == m else "" }}>{{ m }}</option>
@@ -1261,7 +1352,7 @@ ANA_SAYFA = """
         </div>
         <div class="arama-grup">
           <label>Dış Renk</label>
-          <select name="renk">
+          <select name="renk" onchange="this.form.requestSubmit()">
             <option value="">Tümü</option>
             {% for r in renk_secenekleri %}
             <option value="{{ r }}" {{ "selected" if renk_secili == r else "" }}>{{ r }}</option>
@@ -1270,7 +1361,7 @@ ANA_SAYFA = """
         </div>
         <div class="arama-grup">
           <label>Yakıt Tipi</label>
-          <select name="yakit">
+          <select name="yakit" onchange="this.form.requestSubmit()">
             <option value="">Tümü</option>
             {% for y in yakit_secenekleri %}
             <option value="{{ y }}" {{ "selected" if yakit_secili == y else "" }}>{{ y }}</option>
@@ -1323,7 +1414,7 @@ ANA_SAYFA = """
 
 <div class="icerik-alt">
 
-  <h2>{{ baslik_metni }} ({{ toplam_kayit }} kayıt{{ ", sayfa %d / %d"|format(sayfa, toplam_sayfa) if toplam_sayfa > 1 else "" }})</h2>
+  <h2 class="sonuc-basligi">{{ baslik_metni }} ({{ toplam_kayit }} kayıt{{ ", sayfa %d / %d"|format(sayfa, toplam_sayfa) if toplam_sayfa > 1 else "" }})</h2>
 
   <div class="tablo-sarmalayici">
   <table id="tablo-sonuclar">
@@ -1643,8 +1734,21 @@ def anasayfa():
     )
 
     # Tarih kutucukları HER ZAMAN dolu görünsün -- kullanıcı henüz kendi
-    # tarihini girmediyse kutularda bu ayın tarihlerini GÖSTERİYORUZ
-    # (bu değişkenler sadece HTML'e gidiyor, arama mantığını etkilemiyor).
+    # tarihini girmediyse kutularda bu ayın tarihlerini GÖSTERİYORUZ.
+    # UYARI (2026-09-08'de bulunan gerçek hata): bu değerler görünüşte
+    # "sadece HTML'e gidiyor" gibi dursa da, GERÇEKTE <input name="baslangic">
+    # kutusunun value'su olarak basılıyor -- yani kullanıcı hiç dokunmasa
+    # bile, formun HERHANGİ bir şekilde gönderilmesinde (Model seçince
+    # otomatik gönderim, ya da Ara'ya basmak) bu ayın tarihleri SESSİZCE
+    # tarih filtresi olarak katılıyordu. Sonuç: "Model seçtim ama yanlış/eksik
+    # sonuç geliyor" şikayeti -- kullanıcı sadece Model'e göre bakmak
+    # isterken, görünmeden "VE bu ay" filtresi de uygulanıyordu. ÇÖZÜM:
+    # ORTAK_JS'teki tarihDokunuldu bayrağı -- kullanıcı tarih kutularına
+    # GERÇEKTEN dokunmadıysa (yazı girmedi, hızlı tarih butonu/listesi
+    # kullanmadıysa), form gönderilirken bu kutular JS tarafından submit
+    # anında boşaltılıyor (bkz. ORTAK_JS'teki submit event listener'ı) --
+    # o yüzden kutuların GÖRÜNÜŞTE dolu olması artık arama sonucunu
+    # etkilemiyor, sadece kullanıcıya "bu ayı görüyorsun" bilgisini veriyor.
     if not baslangic_deger and not bitis_deger:
         baslangic_gosterim = ay_baslangic.isoformat()
         bitis_gosterim = ay_bitis.isoformat()
@@ -1763,6 +1867,7 @@ def anasayfa():
         yakit_tanimsiz_deger=YAKIT_TANIMSIZ_DEGER,
         yakit_tanimsiz_sayisi=yakit_tanimsiz_sayisi,
         veri_cek_hata=veri_cek_hata,
+        tarih_kullanici_secti=tarih_filtresi_var,
     )
 
 
