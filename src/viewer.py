@@ -17,7 +17,7 @@ küçük bir kütüphane. @app.route("/") gibi bir "dekoratör" (fonksiyonun
 tarayıcıda o adrese gidildiğinde o fonksiyon çalışır ve döndürdüğü HTML
 tarayıcıda gösterilir.
 
-SAYFA YAPISI (5. tasarım):
+SAYFA YAPISI (6. tasarım):
   1) Ana sayfa ("/"): üstte 8 tane TIKLANABİLİR özet kartı (Toplam Araç,
      Gümrük Kaydı Olan Araç, Bu Yıl/Geçen Ay/Bu Ay/Bu Hafta/Dün/Bugün
      eklenen fatura sayısı). Bir karta tıklayınca alttaki tablo o karta
@@ -25,18 +25,27 @@ SAYFA YAPISI (5. tasarım):
      &bitis=... ya da ?gorunum=... parametreleriyle gider).
      Altında GENEL bir arama kutusu var -- şase, motor no, model, renk,
      plaka, fatura no HANGİSİYLE eşleşirse eşleşsin sonuç getirir (tek
-     tek ayrı arama kutuları yerine TEK bir "ara" kutusu). Ayrıca ayrı
-     bir tarih aralığı arama formu var, yanında Dün/Bu Ay/Geçen Ay/Bu Yıl
-     hızlı butonları (Ara butonunun YANINDA, altında değil).
+     tek ayrı arama kutuları yerine TEK bir "ara" kutusu). Aynı kutunun
+     altında Model / Dış Renk / Yakıt Tipi seçilebilen ÜÇ combobox +
+     "Filtrele" butonu var -- veritabanındaki BENZERSİZ değerlerle
+     dolduruluyor, seçilince tabloyu o kritere göre filtreler.
+     Ayrıca ayrı bir tarih aralığı arama formu var, Bitiş kutusunun
+     YANINDA (altında değil) Bugün/Dün/Bu Hafta/Bu Ay/Geçen Ay/Bu Yıl
+     hızlı butonları.
      Sonuç HER ZAMAN tek bir listeleme tablosunda gösterilir (şase, motor
-     no, model, plaka, fatura no/tarihi, toplam gibi ÖZET bilgiler). Bu
-     tablo, sonuç bulunamadığında bile başlıklarıyla birlikte sabit durur
-     -- boş diye kaybolmaz.
+     no, model, renkler, YAKIT TİPİ, plaka, fatura no/tarihi, toplam gibi
+     ÖZET bilgiler). Bu tablo, sonuç bulunamadığında bile başlıklarıyla
+     birlikte sabit durur -- boş diye kaybolmaz.
   2) Bir satıra tıklanınca ayrı bir DETAY sayfası ("/arac/<sasi_no>")
      KÜÇÜK, AYRI BİR PENCEREDE (popup) açılır -- ana sayfa (liste/arama)
      OLDUĞU GİBİ, hiç etkilenmeden kalır. O aracın TÜM bilgileri
-     (özellikler, tüm alış faturaları, gümrük bilgisi) o küçük pencerede
-     gösterilir.
+     (özellikler, YAKIT TİPİ, tüm alış faturaları, gümrük bilgisi) o
+     küçük pencerede gösterilir.
+
+NOT (yakıt tipi hakkında, 2026-09-08): "Yakıt Tipi" (Benzin/Dizel/
+Elektrik) DMS API'sinden gelen gerçek bir alan DEĞİL -- motor_no'nun ilk
+harfinden TAHMİN ediliyor (bkz. src/etl.py: yakit_tipi_belirle()). Bu
+sayfa sadece o tahmini gösterir/filtreler, kendisi bir hesaplama yapmaz.
 
 ETKİ HARİTASI: Bu dosya db.py ve config.py'yi kullanır (okuma amaçlı).
 etl.py/api_client.py'ye hiç dokunmaz, onları da etkilemez -- tamamen
@@ -60,10 +69,11 @@ app = Flask(__name__)
 # {"kolon_adi": deger} şeklinde sözlük döner. HTML şablonunda kolon ismiyle
 # erişmek (row["sasi_no"] gibi) daha okunaklı olduğu için bunu tercih ettik.
 
-# ---- Ana sayfadaki ÖZET liste tablosu için DÖRT sorgu -------------------
+# ---- Ana sayfadaki ÖZET liste tablosu için BEŞ sorgu ---------------------
 # Hepsi AYNI kolonları (aynı sırayla) döndürüyor ki tek bir HTML tablo
 # şablonu hepsi için de kullanılabilsin: sasi_no, motor_no, carline_adi,
-# model_yili, dis_renk, ic_renk, plaka, fatura_no, fatura_tarihi, toplam.
+# model_yili, dis_renk, ic_renk, yakit_adi, plaka, fatura_no,
+# fatura_tarihi, toplam.
 
 # 1) GENEL ARAMA: tek bir kutuya yazılan metin; şase, motor no, model,
 #    dış/iç renk, fatura no ya da plakadan HERHANGİ BİRİYLE eşleşirse
@@ -75,6 +85,7 @@ GENEL_ARAMA_SORGUSU = """
         a.sasi_no, a.motor_no,
         c.adi AS carline_adi, a.model_yili,
         dr.adi AS dis_renk, ic.adi AS ic_renk,
+        yt.adi AS yakit_adi,
         (
             SELECT p.plaka FROM plakalar p
             WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
@@ -87,6 +98,7 @@ GENEL_ARAMA_SORGUSU = """
     LEFT JOIN carline c ON c.id = s.carline_id
     LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
     LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
+    LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
     LEFT JOIN alis_faturalari af ON af.arac_id = a.id
     WHERE
         a.sasi_no ILIKE %s
@@ -111,6 +123,7 @@ TARIH_LISTESI_SORGUSU = """
         a.sasi_no, a.motor_no,
         c.adi AS carline_adi, a.model_yili,
         dr.adi AS dis_renk, ic.adi AS ic_renk,
+        yt.adi AS yakit_adi,
         (
             SELECT p.plaka FROM plakalar p
             WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
@@ -124,6 +137,7 @@ TARIH_LISTESI_SORGUSU = """
     LEFT JOIN carline c ON c.id = s.carline_id
     LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
     LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
+    LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
     WHERE af.fatura_tarihi BETWEEN %s AND %s
     ORDER BY af.fatura_tarihi DESC
     LIMIT 500
@@ -136,6 +150,7 @@ TUM_ARACLAR_SORGUSU = """
         a.sasi_no, a.motor_no,
         c.adi AS carline_adi, a.model_yili,
         dr.adi AS dis_renk, ic.adi AS ic_renk,
+        yt.adi AS yakit_adi,
         (
             SELECT p.plaka FROM plakalar p
             WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
@@ -148,6 +163,7 @@ TUM_ARACLAR_SORGUSU = """
     LEFT JOIN carline c ON c.id = s.carline_id
     LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
     LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
+    LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
     LEFT JOIN alis_faturalari af ON af.arac_id = a.id
     ORDER BY af.fatura_tarihi DESC NULLS LAST
     LIMIT 500
@@ -159,6 +175,7 @@ ITHAL_ARACLAR_SORGUSU = """
         a.sasi_no, a.motor_no,
         c.adi AS carline_adi, a.model_yili,
         dr.adi AS dis_renk, ic.adi AS ic_renk,
+        yt.adi AS yakit_adi,
         (
             SELECT p.plaka FROM plakalar p
             WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
@@ -171,10 +188,74 @@ ITHAL_ARACLAR_SORGUSU = """
     LEFT JOIN carline c ON c.id = s.carline_id
     LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
     LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
+    LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
     LEFT JOIN alis_faturalari af ON af.arac_id = a.id
     WHERE EXISTS (SELECT 1 FROM gumruk_bilgileri g WHERE g.arac_id = a.id)
     ORDER BY af.fatura_tarihi DESC NULLS LAST
     LIMIT 500
+"""
+
+# 5) FİLTRE: Model / Dış Renk / Yakıt Tipi comboboxlarına göre (istenilen
+#    herhangi bir alt kümesi boş bırakılabilir). ÖĞRENME NOTU: "(%s = ''
+#    OR kolon = %s)" deseni, tek bir SABİT SQL metniyle OPSİYONEL filtre
+#    yapmamızı sağlıyor -- kutu boşsa (%s = '') o koşul hep DOĞRU olur,
+#    yani o alanda hiç filtre uygulanmamış gibi davranır. Bu yüzden her
+#    kutu için aynı değeri İKİ KERE parametre olarak veriyoruz.
+FILTRE_SORGUSU = """
+    SELECT
+        a.sasi_no, a.motor_no,
+        c.adi AS carline_adi, a.model_yili,
+        dr.adi AS dis_renk, ic.adi AS ic_renk,
+        yt.adi AS yakit_adi,
+        (
+            SELECT p.plaka FROM plakalar p
+            WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
+        ) AS plaka,
+        af.fatura_no, af.fatura_tarihi, af.toplam
+    FROM araclar a
+    LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
+    LEFT JOIN spec_ocn so ON so.id = sor.spec_ocn_id
+    LEFT JOIN spec s ON s.id = so.spec_id
+    LEFT JOIN carline c ON c.id = s.carline_id
+    LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
+    LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
+    LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
+    LEFT JOIN alis_faturalari af ON af.arac_id = a.id
+    WHERE
+        (%s = '' OR c.adi = %s)
+        AND (%s = '' OR dr.adi = %s)
+        AND (%s = '' OR yt.adi = %s)
+    ORDER BY af.fatura_tarihi DESC NULLS LAST
+    LIMIT 500
+"""
+
+# ---- Ana sayfadaki 3 combobox'ı (Model/Dış Renk/Yakıt Tipi) doldurmak
+#      için veritabanındaki BENZERSİZ değerleri çeken üç küçük sorgu.
+MODEL_SECENEKLERI_SORGUSU = """
+    SELECT DISTINCT c.adi AS deger
+    FROM araclar a
+    LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
+    LEFT JOIN spec_ocn so ON so.id = sor.spec_ocn_id
+    LEFT JOIN spec s ON s.id = so.spec_id
+    LEFT JOIN carline c ON c.id = s.carline_id
+    WHERE c.adi IS NOT NULL
+    ORDER BY c.adi
+"""
+
+RENK_SECENEKLERI_SORGUSU = """
+    SELECT DISTINCT dr.adi AS deger
+    FROM araclar a
+    LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
+    LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
+    WHERE dr.adi IS NOT NULL
+    ORDER BY dr.adi
+"""
+
+YAKIT_SECENEKLERI_SORGUSU = """
+    SELECT DISTINCT yt.adi AS deger
+    FROM araclar a
+    JOIN yakit_tipleri yt ON yt.id = a.yakit_id
+    ORDER BY yt.adi
 """
 # UYARI: LIMIT 500 kasıtlı -- geniş bir arama/tarih aralığı binlerce satır
 # döndürebileceğinden sayfa yavaşlamasın diye. Sıralama/filtreleme sadece
@@ -188,6 +269,7 @@ SASI_SORGUSU = """
         s.kod AS spec_kodu,
         o.no AS ocn_no, o.adi AS ocn_adi,
         dr.adi AS dis_renk, ic.adi AS ic_renk,
+        yt.adi AS yakit_adi,
         (
             SELECT string_agg(DISTINCT p.plaka, ', ')
             FROM plakalar p WHERE p.arac_id = a.id
@@ -200,6 +282,7 @@ SASI_SORGUSU = """
     LEFT JOIN ocn o ON o.id = so.ocn_id
     LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
     LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
+    LEFT JOIN yakit_tipleri yt ON yt.id = a.yakit_id
     WHERE a.sasi_no = %s
 """
 
@@ -335,9 +418,28 @@ ORTAK_STIL = """
   .genel-arama-satiri input[type=text] { flex: 1 1 240px; min-width: 200px; }
   .genel-arama-satiri button { margin-top: 0; }
 
-  /* Tarih aralığı formundaki "Ara" + Dün/Bu Ay/Geçen Ay/Bu Yıl butonları
-     AYNI SATIRDA yan yana dursun diye tek bir flex satırına konuyor. */
-  .tarih-buton-satiri { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  /* Model / Dış Renk / Yakıt Tipi comboboxları -- genel arama kutusunun
+     ALTINDA, ince bir çizgiyle ayrılmış ikinci bir satır. Her combobox
+     kendi etiketiyle alt alta, satır kendisi yan yana (flex). */
+  .combo-satiri {
+    display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end;
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid #eef0f2;
+  }
+  .combo-grubu { display: flex; flex-direction: column; gap: 4px; }
+  .combo-grubu label { margin: 0; }
+  .combo-grubu select {
+    padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 4px;
+    font-size: 13px; min-width: 160px; background: #fff;
+  }
+  .combo-satiri button { margin-top: 0; }
+
+  /* Tarih aralığı formu: Başlangıç + Bitiş + hızlı butonlar (Bugün/Dün/
+     Bu Hafta/Bu Ay/Geçen Ay/Bu Yıl) AYNI SATIRDA -- .tarih-satiri hepsini
+     tek bir flex satırına alıyor, butonlar Bitiş kutusunun YANINDA durur
+     (altında değil). Dar ekranda flex-wrap sayesinde alta sarkar. */
+  .tarih-satiri { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .tarih-satiri label { margin-top: 0; }
+  .tarih-buton-satiri { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 0; margin-left: 6px; }
   .tarih-buton-satiri button { margin-top: 0; }
   .buton-ikincil {
     background: #eef1f5; color: #1f2937; border: 1px solid #cbd5e1;
@@ -483,9 +585,20 @@ function tarihAyarla(tur) {
   function formatla(d) { return d.getFullYear() + '-' + ikiBasamak(d.getMonth() + 1) + '-' + ikiBasamak(d.getDate()); }
 
   var baslangic, bitis;
-  if (tur === 'dun') {
+  if (tur === 'bugun') {
+    baslangic = bitis = formatla(bugun);
+  } else if (tur === 'dun') {
     var dun = new Date(yil, ay, bugun.getDate() - 1);
     baslangic = bitis = formatla(dun);
+  } else if (tur === 'bu-hafta') {
+    // Pazartesi -- Pazar. getDay(): 0=Pazar, 1=Pazartesi, ... 6=Cumartesi.
+    // Pazartesi'ye kaç gün geriye gidileceğini hesaplıyoruz (Pazar için 6).
+    var gun = bugun.getDay();
+    var pazartesiyeFark = (gun === 0) ? 6 : (gun - 1);
+    var pazartesi = new Date(yil, ay, bugun.getDate() - pazartesiyeFark);
+    var pazar = new Date(pazartesi.getFullYear(), pazartesi.getMonth(), pazartesi.getDate() + 6);
+    baslangic = formatla(pazartesi);
+    bitis = formatla(pazar);
   } else if (tur === 'bu-ay') {
     baslangic = formatla(new Date(yil, ay, 1));
     bitis = formatla(new Date(yil, ay + 1, 0)); // ayın son günü (bir sonraki ayın 0. günü)
@@ -582,27 +695,60 @@ ANA_SAYFA = """
 
   <div class="arama-kartlari">
     <form class="arama-formu" method="get">
-      <b>Ara</b> <span class="bilgi-notu">(şase, motor no, model, renk, plaka ya da fatura no)</span><br>
+      <b>Ara / Filtrele</b> <span class="bilgi-notu">(şase, motor no, model, renk, plaka, fatura no; ya da alttan model/renk/yakıt tipi seçerek)</span><br>
       <div class="genel-arama-satiri">
         <label>Ne arıyorsun:</label>
         <input type="text" name="q" value="{{ arama_metni }}" placeholder="örn. KMHM341..., 34 ABC 123, kırmızı, Tucson...">
-        <button type="submit">Ara</button>
+        <button type="submit" name="eylem" value="ara">Ara</button>
+      </div>
+      <div class="combo-satiri">
+        <div class="combo-grubu">
+          <label>Model</label>
+          <select name="model">
+            <option value="">Tümü</option>
+            {% for m in model_secenekleri %}
+            <option value="{{ m }}" {{ "selected" if model_secili == m else "" }}>{{ m }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="combo-grubu">
+          <label>Dış Renk</label>
+          <select name="renk">
+            <option value="">Tümü</option>
+            {% for r in renk_secenekleri %}
+            <option value="{{ r }}" {{ "selected" if renk_secili == r else "" }}>{{ r }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="combo-grubu">
+          <label>Yakıt Tipi</label>
+          <select name="yakit">
+            <option value="">Tümü</option>
+            {% for y in yakit_secenekleri %}
+            <option value="{{ y }}" {{ "selected" if yakit_secili == y else "" }}>{{ y }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit" name="eylem" value="filtrele">Filtrele</button>
       </div>
     </form>
 
     <form class="arama-formu" method="get" id="tarih-arama-formu">
       <b>Tarih aralığına göre ara</b><br>
-      <label>Başlangıç:</label>
-      <input type="date" name="baslangic" id="baslangic-girdi" value="{{ baslangic_deger }}">
-      &nbsp;
-      <label>Bitiş:</label>
-      <input type="date" name="bitis" id="bitis-girdi" value="{{ bitis_deger }}">
-      <div class="tarih-buton-satiri">
-        <button type="submit">Ara</button>
-        <button type="button" class="buton-ikincil" onclick="tarihAyarla('dun')">Dün</button>
-        <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-ay')">Bu Ay</button>
-        <button type="button" class="buton-ikincil" onclick="tarihAyarla('gecen-ay')">Geçen Ay</button>
-        <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-yil')">Bu Yıl</button>
+      <div class="tarih-satiri">
+        <label>Başlangıç:</label>
+        <input type="date" name="baslangic" id="baslangic-girdi" value="{{ baslangic_deger }}">
+        <label>Bitiş:</label>
+        <input type="date" name="bitis" id="bitis-girdi" value="{{ bitis_deger }}">
+        <div class="tarih-buton-satiri">
+          <button type="submit">Ara</button>
+          <button type="button" class="buton-ikincil" onclick="tarihAyarla('bugun')">Bugün</button>
+          <button type="button" class="buton-ikincil" onclick="tarihAyarla('dun')">Dün</button>
+          <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-hafta')">Bu Hafta</button>
+          <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-ay')">Bu Ay</button>
+          <button type="button" class="buton-ikincil" onclick="tarihAyarla('gecen-ay')">Geçen Ay</button>
+          <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-yil')">Bu Yıl</button>
+        </div>
       </div>
     </form>
   </div>
@@ -614,9 +760,10 @@ ANA_SAYFA = """
   <table id="tablo-sonuclar">
     <thead>
       <tr class="baslik-satiri" onclick="event.target.tagName === 'TH' && sirala('tablo-sonuclar', Array.from(event.target.parentNode.children).indexOf(event.target))">
-        <th>Şase</th><th>Motor No</th><th>Model</th><th>Model Yılı</th><th>Dış Renk</th><th>İç Renk</th><th>Plaka</th><th>Fatura No</th><th>Fatura Tarihi</th><th>Toplam</th>
+        <th>Şase</th><th>Motor No</th><th>Model</th><th>Model Yılı</th><th>Dış Renk</th><th>İç Renk</th><th>Yakıt</th><th>Plaka</th><th>Fatura No</th><th>Fatura Tarihi</th><th>Toplam</th>
       </tr>
       <tr class="filtre-satiri">
+        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
         <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
         <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
         <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
@@ -639,6 +786,7 @@ ANA_SAYFA = """
         <td>{{ r.model_yili or "-" }}</td>
         <td>{{ r.dis_renk or "-" }}</td>
         <td>{{ r.ic_renk or "-" }}</td>
+        <td>{{ r.yakit_adi or "-" }}</td>
         <td>{{ r.plaka or "-" }}</td>
         <td>{{ r.fatura_no or "-" }}</td>
         <td>{{ r.fatura_tarihi or "-" }}</td>
@@ -647,7 +795,7 @@ ANA_SAYFA = """
       {% endfor %}
     {% else %}
       <tr class="bos-satiri">
-        <td colspan="10">
+        <td colspan="11">
           {% if arama_yapildi %}
             Bu aramayla eşleşen kayıt bulunamadı.
           {% else %}
@@ -702,6 +850,7 @@ DETAY_SAYFA = """
     <tr><th>Donanım (OCN)</th><td>{{ arac.ocn_adi or "-" }} ({{ arac.ocn_no or "-" }})</td></tr>
     <tr><th>Dış Renk</th><td>{{ arac.dis_renk or "-" }}</td></tr>
     <tr><th>İç Renk</th><td>{{ arac.ic_renk or "-" }}</td></tr>
+    <tr><th>Yakıt Tipi</th><td>{{ arac.yakit_adi or "-" }} <span class="bilgi-notu">(motor no'nun ilk harfinden tahmin)</span></td></tr>
     <tr><th>Plaka(lar)</th><td>{{ arac.plakalar or "-" }}</td></tr>
   </table>
   </div>
@@ -792,15 +941,19 @@ DETAY_SAYFA = """
 
 @app.route("/")
 def anasayfa():
-    """Ana sayfa: 8 tıklanabilir özet kartı + genel arama kutusu + tarih
-    aralığı arama formu -- hepsi AYNI özet liste tablosunu doldurur.
+    """Ana sayfa: 8 tıklanabilir özet kartı + genel arama kutusu + Model/
+    Dış Renk/Yakıt Tipi comboboxları + tarih aralığı arama formu -- hepsi
+    AYNI özet liste tablosunu doldurur.
 
     ÖNCELİK SIRASI (hangi arama önce kontrol edilir):
       1) ?gorunum=tum       -> tüm araçlar (Toplam Araç kartı)
       2) ?gorunum=ithal     -> gümrük kaydı olan araçlar (o kart)
-      3) ?q=...             -> genel arama (şase/motor/model/renk/plaka/fatura)
-      4) ?baslangic=&bitis= -> tarih aralığı (diğer 6 kart da buraya düşer)
-      5) hiçbiri yoksa      -> varsayılan: bu ayı otomatik göster
+      3) ?eylem=filtrele    -> Model/Dış Renk/Yakıt Tipi comboboxları
+                               (üçü de boşsa bile "Filtrele" basıldıysa
+                               bu dala girer, sonuç tüm araçlar olur)
+      4) ?q=...             -> genel arama (şase/motor/model/renk/plaka/fatura)
+      5) ?baslangic=&bitis= -> tarih aralığı (diğer 6 kart da buraya düşer)
+      6) hiçbiri yoksa      -> varsayılan: bu ayı otomatik göster
 
     ÖĞRENME NOTU (varsayılan tarih): Tarih kutuları hiçbir zaman boş
     görünmesin diye (ve sayfa ilk açıldığında hemen işe yarasın diye)
@@ -848,9 +1001,23 @@ def anasayfa():
     baslangic_deger = request.args.get("baslangic", "").strip()
     bitis_deger = request.args.get("bitis", "").strip()
     gorunum = request.args.get("gorunum", "").strip()
+    eylem = request.args.get("eylem", "").strip()
+    model_secili = request.args.get("model", "").strip()
+    renk_secili = request.args.get("renk", "").strip()
+    yakit_secili = request.args.get("yakit", "").strip()
+
+    # Model/Dış Renk/Yakıt Tipi comboboxlarını dolduracak benzersiz
+    # değerler -- HER istekte çekiliyor (sayfa yenilendiğinde combobox
+    # seçenekleri güncel kalsın diye), veri az olduğu için (birkaç bin
+    # araç) performans sorunu yaratmaz.
+    model_secenekleri = [r["deger"] for r in _sorgu_calistir(MODEL_SECENEKLERI_SORGUSU, [])]
+    renk_secenekleri = [r["deger"] for r in _sorgu_calistir(RENK_SECENEKLERI_SORGUSU, [])]
+    yakit_secenekleri = [r["deger"] for r in _sorgu_calistir(YAKIT_SECENEKLERI_SORGUSU, [])]
 
     hicbir_parametre_yok = (
-        not arama_metni and not baslangic_deger and not bitis_deger and not gorunum
+        not arama_metni and not baslangic_deger and not bitis_deger
+        and not gorunum and not eylem
+        and not model_secili and not renk_secili and not yakit_secili
     )
 
     # Tarih kutucukları HER ZAMAN dolu görünsün -- kullanıcı henüz kendi
@@ -875,6 +1042,21 @@ def anasayfa():
         arama_yapildi = True
         sonuclar = _sorgu_calistir(ITHAL_ARACLAR_SORGUSU, [])
         baslik_metni = "Gümrük kaydı olan araçlar"
+    elif eylem == "filtrele":
+        arama_yapildi = True
+        sonuclar = _sorgu_calistir(FILTRE_SORGUSU, [
+            model_secili, model_secili,
+            renk_secili, renk_secili,
+            yakit_secili, yakit_secili,
+        ])
+        parcalar = []
+        if model_secili:
+            parcalar.append("Model: %s" % model_secili)
+        if renk_secili:
+            parcalar.append("Dış Renk: %s" % renk_secili)
+        if yakit_secili:
+            parcalar.append("Yakıt: %s" % yakit_secili)
+        baslik_metni = "Filtre sonucu (%s)" % ", ".join(parcalar) if parcalar else "Tüm araçlar"
     elif arama_metni:
         arama_yapildi = True
         joker = "%" + arama_metni + "%"
@@ -906,6 +1088,12 @@ def anasayfa():
         sonuclar=sonuclar,
         arama_yapildi=arama_yapildi,
         baslik_metni=baslik_metni,
+        model_secenekleri=model_secenekleri,
+        renk_secenekleri=renk_secenekleri,
+        yakit_secenekleri=yakit_secenekleri,
+        model_secili=model_secili,
+        renk_secili=renk_secili,
+        yakit_secili=yakit_secili,
     )
 
 

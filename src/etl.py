@@ -9,8 +9,8 @@ Kullanım:
 ETKİ HARİTASI -- bu dosya şu tablolara YAZAR (schema.sql'de bunları
 değiştirirsen burayı da kontrol et):
     arac_tipleri, carline, model_yillari, dis_renkler, ic_renkler, ocn,
-    spec, spec_ocn, spec_ocn_renk, bayiler, araclar, plakalar,
-    gumruk_bilgileri, alis_faturalari
+    spec, spec_ocn, spec_ocn_renk, bayiler, araclar (yakit_id dahil),
+    yakit_tipleri, plakalar, gumruk_bilgileri, alis_faturalari
 
 Bu dosya şunlara OKUMA/BAĞIMLILIK olarak dayanır (bunları değiştirirsen
 burası bozulabilir):
@@ -61,6 +61,35 @@ def _parse_api_date(value):
         except ValueError:
             continue
     log.warning("Tarih parse edilemedi, ham değer saklanamadı: %r", value)
+    return None
+
+
+def yakit_tipi_belirle(motor_no):
+    """Motor numarasının İLK HARFİNE bakarak yakıt tipini tahmin eder.
+
+    KASITLI TASARIM (kullanıcı isteği, 2026-09-08): DMS API'sinde ayrı bir
+    "yakıt tipi" alanı YOK -- kullanıcı, motor no'nun ilk harfinin yakıt
+    tipini gösterdiğini biliyor ve şu basit kuralı istedi:
+        G ile başlıyorsa -> Benzin   (Gasoline)
+        D ile başlıyorsa -> Dizel    (Diesel)
+        E ile başlıyorsa -> Elektrik (Electric)
+    Başka bir harfle başlıyorsa (ya da motor_no boşsa) None döner -- yakıt
+    tipi "bilinmiyor" sayılır, HATA VERMEZ. İleride API gerçek bir
+    yakıt/motor detay bilgisi sağlarsa bu tahmin yerine o veri kullanılmalı.
+
+    Hem burada (yeni araç eklenirken) hem de src/backfill_yakit_tipi.py'de
+    (geçmişte eklenmiş araçlar için tek seferlik) KULLANILIYOR -- mantığı
+    iki yerde ayrı ayrı yazmamak için tek fonksiyonda toplandı.
+    """
+    if not motor_no:
+        return None
+    harf = motor_no.strip()[:1].upper()
+    if harf == "G":
+        return "Benzin"
+    if harf == "D":
+        return "Dizel"
+    if harf == "E":
+        return "Elektrik"
     return None
 
 
@@ -257,16 +286,28 @@ def process_invoice_record(cur, r: dict) -> str:
 
     arac_id = db.get_id_by(cur, "araclar", "sasi_no", sasi_no)
     if arac_id is None:
+        # --- 11b. yakıt tipi (yakit_tipleri tablosu) ---
+        # motor_no'nun ilk harfinden tahmin ediliyor (bkz. yukarıdaki
+        # yakit_tipi_belirle() fonksiyonu ve KASITLI TASARIM notu). Sadece
+        # YENİ araç eklenirken hesaplanıyor -- şasi zaten varsa (aşağıdaki
+        # "KASITLI TASARIM" notuna bak) araç kaydına hiç dokunulmuyor, o
+        # yüzden yakit_id de o durumda hesaplanmasına gerek yok.
+        engine_no = item.get("engineNumber")
+        yakit_id = None
+        yakit_adi = yakit_tipi_belirle(engine_no)
+        if yakit_adi:
+            yakit_id = db.upsert_and_get_id(cur, "yakit_tipleri", ["adi"], {"adi": yakit_adi})
+
         cur.execute(
             """
-            INSERT INTO araclar (sasi_no, motor_no, model_yili, spec_ocn_renk_id)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO araclar (sasi_no, motor_no, model_yili, spec_ocn_renk_id, yakit_id)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (sasi_no, item.get("engineNumber"), int(model_year) if model_year else None, spec_ocn_renk_id),
+            (sasi_no, engine_no, int(model_year) if model_year else None, spec_ocn_renk_id, yakit_id),
         )
         arac_id = cur.fetchone()[0]
-        log.info("Yeni araç eklendi: sasi=%s", sasi_no)
+        log.info("Yeni araç eklendi: sasi=%s, yakit=%s", sasi_no, yakit_adi or "bilinmiyor")
     # NOT (KASITLI TASARIM): şasi zaten varsa araç kaydı GÜNCELLENMİYOR,
     # sadece faturası ekleniyor (adım 14). Yani bir aracın rengi/spec'i
     # ilk görüldüğü faturadaki haliyle sabit kalır. Bunu değiştirmek

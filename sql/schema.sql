@@ -98,11 +98,23 @@ CREATE TABLE ic_renkler (
 
 -- ============================================================
 -- MOTOR / TEKNİK
--- YAZAN: ŞU AN HİÇBİR PYTHON DOSYASI. GetPurchaseInvoicesByDates bu
--- bilgileri döndürmüyor. Bu tablolar ileride bir "teknik detay"
--- endpoint'i eklenince kullanılacak (bkz. erk-arac-database skill'i).
--- ocn.motor_id / ocn.vites_id o zaman UPDATE ile doldurulacak, etl.py'nin
--- ocn INSERT'ine dokunmaya gerek kalmayacak.
+--
+-- yakit_tipleri: YAZAN src/etl.py (adım 11b, YENİ araç eklenirken) +
+-- src/backfill_yakit_tipi.py (geçmişte bu özellik eklenmeden önce
+-- eklenmiş araçlar için TEK SEFERLİK doldurma). NOT (KASITLI TASARIM,
+-- 2026-09-08): Bu, DMS API'sinden gelen gerçek bir alan DEĞİL --
+-- araclar.motor_no'nun İLK HARFİNDEN tahmin ediliyor (G->Benzin,
+-- D->Dizel, E->Elektrik, bkz. etl.py'deki yakit_tipi_belirle()). araclar
+-- tablosu buraya DOĞRUDAN bağlanıyor (aşağıya bak, yakit_id kolonu) --
+-- motor_tipleri/ocn zinciri üzerinden DEĞİL, çünkü motor_no her araca
+-- özel ama motor_tipleri bir OCN/spec seviyesinde PAYLAŞILAN bir tanım
+-- olması için tasarlanmıştı.
+--
+-- vites_tipleri / motor_tipleri: YAZAN ŞU AN HİÇBİR PYTHON DOSYASI.
+-- GetPurchaseInvoicesByDates bu bilgileri döndürmüyor. Bu tablolar
+-- ileride bir "teknik detay" endpoint'i eklenince kullanılacak (bkz.
+-- erk-arac-database skill'i). ocn.motor_id / ocn.vites_id o zaman UPDATE
+-- ile doldurulacak, etl.py'nin ocn INSERT'ine dokunmaya gerek kalmayacak.
 -- ============================================================
 
 CREATE TABLE yakit_tipleri (
@@ -194,7 +206,9 @@ CREATE TABLE bayiler (
 -- Şasi zaten varsa bu tabloya BİR DAHA YAZILMAZ (bkz. etl.py'deki
 -- "KASITLI TASARIM" notu) -- ileride başka bir endpoint bu araca dair
 -- ek bilgi getirirse (örn. plaka değişikliği), o script de "şasi var mı"
--- kontrolüyle bu tabloya UPDATE atmalı, INSERT değil.
+-- kontrolüyle bu tabloya UPDATE atmalı, INSERT değil. yakit_id de bu
+-- yüzden SADECE araç ilk eklenirken hesaplanıyor (bkz. yukarıdaki MOTOR/
+-- TEKNİK notu) -- geçmiş araçlar için src/backfill_yakit_tipi.py kullanıldı.
 -- ============================================================
 
 CREATE TABLE araclar (
@@ -203,12 +217,14 @@ CREATE TABLE araclar (
     motor_no            TEXT,                   -- API: engineNumber
     model_yili          INTEGER,                -- API: modelYear (denormalize edilmiş hızlı erişim için)
     spec_ocn_renk_id    INTEGER REFERENCES spec_ocn_renk(id),
+    yakit_id            INTEGER REFERENCES yakit_tipleri(id),  -- motor_no'nun ilk harfinden TAHMİN (API alanı değil, bkz. MOTOR/TEKNİK notu)
     aktif_mi            BOOLEAN NOT NULL DEFAULT TRUE,
     olusturulma_tarihi  TIMESTAMPTZ NOT NULL DEFAULT now(),
     guncellenme_tarihi  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_araclar_spec_ocn_renk ON araclar(spec_ocn_renk_id);
+CREATE INDEX idx_araclar_yakit ON araclar(yakit_id);
 
 -- YAZAN: src/etl.py (adım 12) -- aynı (arac_id, plaka) ikilisi için
 -- mükerrer satır açılmaması kontrol ediliyor.
