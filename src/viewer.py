@@ -1959,10 +1959,14 @@ def arac_detay(sasi_no):
 
 
 if __name__ == "__main__":
-    # host="127.0.0.1": SADECE bu bilgisayardan erişilebilir, ağdaki başka
-    # bir cihazdan (örn. telefon) açılamaz -- bilerek böyle, çünkü içeride
-    # fiyat/fatura gibi hassas veri var. Ağ genelinde erişim istersen
-    # host="0.0.0.0" yapman gerekir ama bunu bilerek ve güvenlik riskini
-    # göze alarak yap.
+    # host="0.0.0.0" (2026-09-08: bilerek ağa açıldı -- Engin'in isteğiyle,
+    # ağdaki başka bir cihazdan http://<bu bilgisayarın IP'si>:5050 ile
+    # erişilebilsin diye). UYARI: içeride fatura/fiyat gibi hassas veri var
+    # ve burada HİÇBİR giriş/şifre koruması YOK -- aynı ağdaki (Wi-Fi/LAN)
+    # HERKES bu adrese girip görebilir. Windows Firewall'da 5050 portu için
+    # "gelen bağlantılara izin ver" kuralı da AYRICA gerekiyor, kod bunu
+    # kendi başına açamaz. Tekrar sadece bu bilgisayardan erişilir hale
+    # getirmek istersen host="127.0.0.1" olarak geri al.
     print("Tarayıcıda şu adresi aç: http://localhost:5050")
-    app.run(host="127.0.0.1", port=5050, debug=False)
+    print("Ağdaki diğer cihazlardan: http://<bu bilgisayarın IP'si>:5050")
+    app.run(host="0.0.0.0", port=5050, debug=False)
