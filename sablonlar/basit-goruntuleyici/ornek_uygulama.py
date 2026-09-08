@@ -18,8 +18,11 @@ DESEN (erk-database/src/viewer.py'den alındı):
     yazan bir satır görünür).
   - Detay sayfası ("/kayit/<id>"): bir satıra tıklanınca o kaydın TÜM
     bilgilerini gösteren ayrı sayfa.
-  - Sütun başlığına tıklayınca sıralama, filtre kutularına yazınca anlık
-    filtreleme (tarayıcıda, sayfa yenilenmeden -- bkz. ortak.py ORTAK_JS).
+  - Sütun başlığına tıklayınca sıralama; sütun başlığının altındaki
+    "Filtrele ▾" butonuna tıklayınca EXCEL BENZERİ bir çoklu-seçim filtre
+    popup'ı (o kolonda geçen tüm farklı değerler onay kutularıyla listelenir,
+    birden fazlası seçilebilir) -- tamamen tarayıcıda, sayfa yenilenmeden
+    (bkz. ortak.py ORTAK_JS: sutunFiltrePopupAc/filtreleUygula).
 """
 from flask import Flask, request, render_template_string
 
@@ -106,7 +109,7 @@ LISTE_SAYFASI = """
         {% for baslik, anahtar in kolonlar %}<th>{{ baslik }}</th>{% endfor %}
       </tr>
       <tr class="filtre-satiri">
-        {% for baslik, anahtar in kolonlar %}<th><input type="text" oninput="filtrele('tablo-liste')" placeholder="ara..."></th>{% endfor %}
+        {% for baslik, anahtar in kolonlar %}<th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-liste', this)">Filtrele ▾</button></th>{% endfor %}
       </tr>
     </thead>
     <tbody data-dolu="{{ '1' if kayitlar else '0' }}">

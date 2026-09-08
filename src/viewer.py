@@ -1,9 +1,11 @@
 """
 ERK Araç Database - Görüntüleyici
 
-Bu GERÇEK bir uygulama değil -- sadece veritabanındaki veriyi tarayıcıda
-tablo halinde GÖRMEK için küçük bir Flask sayfası. Veri ekleme/silme/
-düzenleme yapmıyor, sadece okuyor (SELECT). ETL sürecine hiçbir etkisi yok.
+ÖNEMLİ (2026-09-08'de değişti): Bu dosya artık TAMAMEN salt-okunur değil.
+Üst barda bir "Veri Çek" butonu var -- bu, src/etl.py'deki run_range()
+fonksiyonunu (yani normalde "python -m src.etl BAŞLANGIÇ BİTİŞ" ile elle
+çalıştırılan DMS çekimini) bir arka plan thread'inde tetikliyor. Tablo
+görünümlerinin kendisi hâlâ salt-okunur (SELECT dışında bir şey yapmazlar).
 
 Çalıştırma:
     python -m src.viewer
@@ -17,25 +19,72 @@ küçük bir kütüphane. @app.route("/") gibi bir "dekoratör" (fonksiyonun
 tarayıcıda o adrese gidildiğinde o fonksiyon çalışır ve döndürdüğü HTML
 tarayıcıda gösterilir.
 
-SAYFA YAPISI (6. tasarım):
+SAYFA YAPISI (7. tasarım):
+  0) Üst bar + özet kartlar + Ara/Filtrele kutusu SABİT (position:
+     sticky, .sabit-ust) -- aşağı kaydırınca tablo altta kayar, üst kısım
+     YERİNDE kalır (2026-09-08: "aşağı inince neyin ne olduğu belli
+     olmuyordu" diye eklendi). ÖNEMLİ SINIR: bu sadece ÜST BARDA çalışıyor
+     -- TABLONUN KENDİ başlığı (thead) SABİT DEĞİL, kaydırınca sayfayla
+     birlikte kayıp gözden kaybolur. Bu bilinçli bir tercih: tablo
+     `.tablo-sarmalayici` içinde ve o kutuda (geniş tabloyu dar ekranda
+     yatay kaydırabilmek için) "overflow-x: auto" var -- Chrome'da (canlı
+     testle doğrulandı, CSS Overflow spesifikasyonu gereği TÜM
+     tarayıcılarda) bu, position:sticky'yi kutunun İÇİNDE hapsediyor ve
+     sticky satırlar veri satırlarının ÜSTÜNE BİNİYOR ("1 kayıt var ama
+     görünmüyor" gibi ciddi bir görsel hataya yol açtı, "overflow-y: clip"
+     ile atlatma denendi ama Chrome bunu "hidden" ile aynı ele alıyor,
+     çözmedi) -- bu yüzden tablo başlığını sabitleme fikri TAMAMEN GERİ
+     ALINDI, sadece üst bar sabit kalıyor. Üst barda ayrıca bir "Veri Çek"
+     formu var (Başlangıç/Bitiş tarihi + buton) -- src/etl.py'deki
+     run_range()'i (28 günlük otomatik parçalama zaten orada var, burada
+     TEKRAR yazılmadı) arka planda bir thread'de çalıştırır, sonucu (kaç
+     fatura eklendi/atlandı) birkaç saniyede bir sorgulanıp (polling) üst
+     barda gösterilir.
   1) Ana sayfa ("/"): üstte 8 tane TIKLANABİLİR özet kartı (Toplam Araç,
      Gümrük Kaydı Olan Araç, Bu Yıl/Geçen Ay/Bu Ay/Bu Hafta/Dün/Bugün
      eklenen fatura sayısı). Bir karta tıklayınca alttaki tablo o karta
      göre otomatik filtrelenir (sayfa "/" adresine ilgili ?baslangic=...
      &bitis=... ya da ?gorunum=... parametreleriyle gider).
-     Altında GENEL bir arama kutusu var -- şase, motor no, model, renk,
-     plaka, fatura no HANGİSİYLE eşleşirse eşleşsin sonuç getirir (tek
-     tek ayrı arama kutuları yerine TEK bir "ara" kutusu). Aynı kutunun
-     altında Model / Dış Renk / Yakıt Tipi seçilebilen ÜÇ combobox +
-     "Filtrele" butonu var -- veritabanındaki BENZERSİZ değerlerle
-     dolduruluyor, seçilince tabloyu o kritere göre filtreler.
-     Ayrıca ayrı bir tarih aralığı arama formu var, Bitiş kutusunun
-     YANINDA (altında değil) Bugün/Dün/Bu Hafta/Bu Ay/Geçen Ay/Bu Yıl
-     hızlı butonları.
+     Altında TEK bir kutu/form var (2026-09-08, kısa ömürlü bir ara
+     tasarım denemesinden sonra: önce Ara/Filtrele/Tarih üç ayrı kutuya
+     bölünmüştü, ama "hepsinde ayrı bir gönder butonu olmasına gerek yok,
+     bir tane yeterli" diye TEK kutuya/forma/butona geri BİRLEŞTİRİLDİ --
+     "Filtrele" ve "Tarih aralığı"nın kendi ayrı submit butonları
+     KALKTI). Kutunun içinde üç satır var, aralarında ince bir çizgi:
+       a) GENEL bir arama satırı: şase, motor no, model, renk, plaka,
+          fatura no HANGİSİYLE eşleşirse eşleşsin sonuç getirir (tek tek
+          ayrı arama kutuları yerine TEK bir "ara" kutusu).
+       b) Model / Dış Renk / Yakıt Tipi seçilebilen ÜÇ combobox --
+          veritabanındaki BENZERSİZ değerlerle dolduruluyor.
+       c) Tarih aralığı: Başlangıç/Bitiş + Bitiş kutusunun YANINDA
+          (altında değil) Bugün/Dün/Bu Hafta/Bu Ay/Geçen Ay/Bu Yıl hızlı
+          butonları.
+     En altta TEK bir "Ara" butonu + yanında tüm alanları sıfırlayıp
+     "/" adresine (varsayılan görünüme) dönen bir "Temizle" linki.
+     ÖNCELİK SIRASI (backend'de anasayfa() route'unda, hepsi aynı formda
+     olduğu için AYNI ANDA birden fazla alan doldurulabilir -- bu durumda
+     hepsi BİRLİKTE VE mantığıyla birleştirilmiyor, şu öncelik sırasındaki
+     İLK dolu olan kullanılıyor): combobox seçimi (model/renk/yakıt) >
+     genel arama metni (q) > tarih aralığı (baslangic/bitis). Örn. hem
+     bir Model seçilip hem de arama kutusuna bir şey yazılırsa, SADECE
+     Model filtresi uygulanır -- bu, üç kutu ayrıyken de zaten böyleydi
+     (eskiden "eylem" parametresiyle hangi butona basıldığı ayırt
+     ediliyordu, tek buton kalınca bunun yerine doğrudan hangi alan(lar)ın
+     dolu olduğuna bakılıyor, davranış DEĞİŞMEDİ).
      Sonuç HER ZAMAN tek bir listeleme tablosunda gösterilir (şase, motor
      no, model, renkler, YAKIT TİPİ, plaka, fatura no/tarihi, toplam gibi
-     ÖZET bilgiler). Bu tablo, sonuç bulunamadığında bile başlıklarıyla
-     birlikte sabit durur -- boş diye kaybolmaz.
+     ÖZET bilgiler). Bu tablo, sonuç bulunamadığında bile sütun
+     başlıklarıyla birlikte RENDER EDİLİR -- boş diye tablonun kendisi
+     kaybolmaz, sadece gövdede "kayıt yok" yazan bir satır görünür (bu,
+     yukarıdaki 0. maddedeki kaydırma/sabitlik konusundan AYRI bir şey).
+     Sütun başlıklarının
+     altındaki "Filtrele ▾" butonuna tıklayınca EXCEL BENZERİ bir filtre
+     kutusu açılır (o kolonda o an görünen BENZERSİZ değerler onay
+     kutularıyla listelenir, birden fazlası işaretlenebilir, üstte küçük
+     bir arama kutusuyla liste daraltılabilir) -- bu tamamen tarayıcıda
+     (JS ile) çalışır, veritabanına gitmez, sadece ekrandaki (en fazla
+     500) satırı süzer. Bu mantık ORTAK_JS/ORTAK_STIL içinde -- yeni bir
+     tablo eklerken (bkz. sablonlar/basit-goruntuleyici/) aynen kopyalanır.
   2) Bir satıra tıklanınca ayrı bir DETAY sayfası ("/arac/<sasi_no>")
      KÜÇÜK, AYRI BİR PENCEREDE (popup) açılır -- ana sayfa (liste/arama)
      OLDUĞU GİBİ, hiç etkilenmeden kalır. O aracın TÜM bilgileri
@@ -47,17 +96,25 @@ Elektrik) DMS API'sinden gelen gerçek bir alan DEĞİL -- motor_no'nun ilk
 harfinden TAHMİN ediliyor (bkz. src/etl.py: yakit_tipi_belirle()). Bu
 sayfa sadece o tahmini gösterir/filtreler, kendisi bir hesaplama yapmaz.
 
-ETKİ HARİTASI: Bu dosya db.py ve config.py'yi kullanır (okuma amaçlı).
-etl.py/api_client.py'ye hiç dokunmaz, onları da etkilemez -- tamamen
-bağımsız, istersen bu dosyayı silsen bile ETL çalışmaya devam eder.
+ETKİ HARİTASI: Bu dosya db.py ve config.py'yi OKUMA amaçlı kullanır (tüm
+tablo sorguları SELECT). AYRICA (2026-09-08'den itibaren) src/etl.py'deki
+run_range() fonksiyonunu ÇAĞIRIR -- "Veri Çek" butonuna basılınca bu
+fonksiyon normal şekilde çalışır (aynı 28 günlük parçalama, aynı upsert
+mantığı), tek fark elle "python -m src.etl ..." yazmak yerine tarayıcıdan
+tetiklenmesi. etl.py'nin KENDİSİNE hiçbir değişiklik YAPMAZ, sadece onu
+çağırır -- yani etl.py'yi elden çalıştırmaya devam etmek de her zaman
+mümkün, ikisi çakışmaz (ama İKİSİNİ AYNI ANDA çalıştırma, bkz. aşağıdaki
+_VERI_CEK_KILIT notu).
 """
 import calendar
 import datetime as dt
+import threading
 
-from flask import Flask, request, render_template_string
+from flask import Flask, jsonify, redirect, request, render_template_string, url_for
 import psycopg2.extras
 
 from . import db
+from . import etl
 
 app = Flask(__name__)
 
@@ -356,6 +413,66 @@ def _sorgu_calistir(sql, params):
 
 
 # ------------------------------------------------------------------
+# "Veri Çek" butonu -- src/etl.py'yi arka planda tetikleme
+# ------------------------------------------------------------------
+# ÖĞRENME NOTU (neden thread, neden global bir durum sözlüğü?): Flask
+# normalde her isteği hızlıca cevaplayıp bitirmek ister -- run_range() ise
+# (özellikle aylarca süren bir aralık için) DAKİKALARCA sürebilir (her 28
+# günlük parça için ayrı bir DMS API çağrısı yapıyor). Eğer bunu doğrudan
+# "Veri Çek" butonunun isteği İÇİNDE çalıştırsaydık, tarayıcı sekmesi o
+# süre boyunca "yükleniyor" halinde takılı kalırdı. Bunun yerine:
+#   1) buton basılınca run_range() AYRI BİR THREAD'DE başlatılır,
+#   2) istek HEMEN "/" adresine geri döner (sayfa donmaz),
+#   3) üst bardaki JS, /veri-cek/durum adresini birkaç saniyede bir
+#      sorgulayarak (polling) ilerlemeyi gösterir.
+# _VERI_CEK_KILIT (threading.Lock): aynı anda İKİ çekimin birden
+# başlamasını engellemek için -- ikisi aynı anda aynı satırlara
+# UPDATE/INSERT atmaya çalışırsa veri karışabilir/yavaşlar. Bu kilit
+# olmadan, kullanıcı butona hızlı hızlı birkaç kez basarsa (ya da iki
+# farklı sekmeden aynı anda) birden fazla run_range() aynı anda çalışırdı.
+_VERI_CEK_KILIT = threading.Lock()
+_VERI_CEK_DURUMU = {
+    "calisiyor": False,
+    "baslangic": None,
+    "bitis": None,
+    "eklenen": None,
+    "atlanan": None,
+    "basarisiz_parca": None,
+    "hata": None,
+    "baslama_zamani": None,
+    "bitis_zamani": None,
+}
+
+
+def _veri_cek_calistir(baslangic, bitis):
+    """Arka plan thread'inin çalıştırdığı fonksiyon -- run_range()'i
+    çağırır, sonucu (ya da hatayı) _VERI_CEK_DURUMU'na yazar. Flask'ın
+    ana request/response döngüsünün DIŞINDA çalışır -- burada bir hata
+    olsa bile kullanıcının tarayıcısına doğrudan bir hata sayfası GİTMEZ,
+    sadece durum sözlüğüne "hata" olarak yazılır (JS bunu okuyup gösterir).
+    """
+    try:
+        eklenen, atlanan, basarisiz = etl.run_range(baslangic, bitis)
+        with _VERI_CEK_KILIT:
+            _VERI_CEK_DURUMU.update({
+                "calisiyor": False,
+                "eklenen": eklenen,
+                "atlanan": atlanan,
+                "basarisiz_parca": basarisiz,
+                "hata": None,
+                "bitis_zamani": dt.datetime.now().strftime("%H:%M:%S"),
+            })
+    except Exception as exc:  # noqa: BLE001 -- kasıtlı: hiçbir hata thread'i sessizce öldürmesin
+        log_mesaji = "Veri çekme başarısız: %s" % exc
+        with _VERI_CEK_KILIT:
+            _VERI_CEK_DURUMU.update({
+                "calisiyor": False,
+                "hata": log_mesaji,
+                "bitis_zamani": dt.datetime.now().strftime("%H:%M:%S"),
+            })
+
+
+# ------------------------------------------------------------------
 # Ortak stil + ortak sıralama/filtreleme JS
 # ------------------------------------------------------------------
 # ÖĞRENME NOTU: Aynı CSS ve aynı JS hem ana sayfada hem detay sayfasında
@@ -381,7 +498,36 @@ ORTAK_STIL = """
   .ust-serit a { color: #cfe0ff; text-decoration: none; font-size: 13px; }
   .ust-serit a:hover { text-decoration: underline; }
 
-  .icerik { padding: 20px 28px 40px; }
+  /* "Veri Çek" formu -- koyu lacivert üst barın İÇİNDE, sağ tarafta.
+     Kutular/buton beyaz zeminli (barın kendisi koyu olduğu için). */
+  .ust-serit-sag { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .veri-cek-formu { display: flex; align-items: center; gap: 6px; }
+  .veri-cek-formu label { margin: 0; color: #cfe0ff; font-size: 12px; }
+  .veri-cek-formu input[type=date] { padding: 5px 7px; font-size: 12px; }
+  .veri-cek-formu span { color: #9db4d1; font-size: 12px; }
+  .veri-cek-formu button { margin-top: 0; padding: 5px 14px; font-size: 12px; background: #16a34a; }
+  .veri-cek-formu button:hover { background: #128a3e; }
+  .veri-cek-durum { font-size: 12px; color: #9db4d1; min-height: 16px; text-align: right; }
+  .veri-cek-durum.vc-calisiyor { color: #fbbf24; }
+  .veri-cek-durum.vc-tamam { color: #4ade80; }
+  .veri-cek-durum.vc-hata { color: #f87171; }
+
+  /* Bir "Veri Çek" isteği reddedilince (örn. geçersiz tarih, ya da zaten
+     bir çekim çalışıyorken) gösterilen kırmızı uyarı şeridi. */
+  .uyari-bar {
+    background: #fef2f2; color: #b91c1c; border-bottom: 1px solid #fecaca;
+    padding: 8px 28px; font-size: 13px;
+  }
+
+  /* SABİT (sticky) ÜST BÖLÜM -- üst bar + özet kartlar + Ara/Filtrele
+     kutuları bunun İÇİNDE. Aşağı kaydırınca bu blok EKRANIN ÜSTÜNE
+     yapışıp kalır, sadece tablo (.icerik-alt) altında kayar -- 2026-09-08:
+     "aşağı inince neyin ne olduğu belli olmuyordu" diye eklendi. Arka
+     plan rengi body'yle AYNI (#eef1f5) olmalı, yoksa altından kayan
+     tablo satırları şeffaf üstten görünür. */
+  .sabit-ust { position: sticky; top: 0; z-index: 300; background: #eef1f5; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+  .icerik-ust { padding: 20px 28px 4px; }
+  .icerik-alt { padding: 12px 28px 40px; }
 
   /* Özet kartları -- TIKLANABİLİR: her kart bir <a> ile sarmalanıyor. */
   .kart-satiri { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
@@ -408,62 +554,69 @@ ORTAK_STIL = """
   .kart.mor .sayi { color: #7c3aed; }
 
   h2 { font-size: 15px; margin-top: 30px; color: #111827; }
-  .arama-kartlari { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .arama-kartlari { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; align-items: flex-start; }
   form.arama-formu {
     background: #fff;
     border-radius: 8px;
     padding: 16px 18px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-    flex: 1 1 320px;
   }
+  /* TEK SATIRLIK arama/filtre kutusu (2026-09-08, ÜÇÜNCÜ deneme): önceki
+     hal (Ara / Model-Renk-Yakıt / Tarih / Ara-Temizle diye ÜST ÜSTE dört
+     satır, aralarında çizgiyle bölünmüş) "sayfanın yarısından fazlasını
+     kaplıyor, dağınık, çorba gibi" diye BEĞENİLMEDİ. Şimdi HER alan
+     (metin kutusu, comboboxlar, tarih, hızlı tarih seçimi, Ara/Temizle
+     butonları) kendi küçük "grup"u -- üstte minik bir etiket, altında
+     kendi girdisi -- ve bütün gruplar TEK bir flex satırında yan yana
+     dizilir, aralarında çizgi/bölüm YOK. Normal ekran genişliğinde HEP
+     TEK SATIR görünür; sadece pencere çok daralırsa (örn. yarım ekran)
+     flex-wrap sayesinde gruplar alt satıra kayar -- ama bu istisna,
+     kural değil. */
+  .arama-formu-birlesik { flex: 1 1 100%; }
   form.arama-formu b { font-size: 13px; color: #111827; }
-  /* ÖNEMLİ: label'a sabit min-width VERİLMİYOR -- "Başlangıç:" ile "Bitiş:"
-     farklı uzunlukta oldukları için sabit bir min-width, kısa olan
-     etiketin ("Bitiş:") yanında kullanılmayan boş bir alan bırakıyordu
-     (kullanıcının ekran görüntüsünde siyah çerçeveyle işaretlediği boşluk).
-     Bunun yerine etiket kendi metni kadar yer kaplasın, input'a sadece
-     küçük sabit bir boşlukla (margin-right) yapışsın. */
-  label { display: inline-block; font-size: 13px; margin-top: 10px; margin-right: 6px; }
+  label { display: inline-block; font-size: 13px; }
   input[type=text], input[type=date] {
     padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px;
   }
+  select {
+    padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 4px;
+    font-size: 13px; background: #fff;
+  }
   button {
-    padding: 7px 18px; border: 0; background: #2563eb; color: #fff;
-    border-radius: 4px; cursor: pointer; font-size: 13px; margin-top: 10px;
+    padding: 7px 16px; border: 0; background: #2563eb; color: #fff;
+    border-radius: 4px; cursor: pointer; font-size: 13px;
   }
   button:hover { background: #1d4ed8; }
 
-  /* Genel "Ara" kutusu: etiket + metin kutusu + buton aynı satırda,
-     metin kutusu (input) kalan tüm genişliği doldursun diye flex ile
-     büyütülüyor -- kutu artık "çok ufak" kalmıyor. */
-  .genel-arama-satiri { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-  .genel-arama-satiri label { margin-top: 0; margin-right: 0; }
-  .genel-arama-satiri input[type=text] { flex: 1 1 240px; min-width: 200px; }
-  .genel-arama-satiri button { margin-top: 0; }
-
-  /* Model / Dış Renk / Yakıt Tipi comboboxları -- genel arama kutusunun
-     ALTINDA, ince bir çizgiyle ayrılmış ikinci bir satır. Her combobox
-     kendi etiketiyle alt alta, satır kendisi yan yana (flex). */
-  .combo-satiri {
-    display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end;
-    margin-top: 12px; padding-top: 12px; border-top: 1px solid #eef0f2;
+  /* Tek satırdaki her alan böyle bir "grup": üstte minik büyük harfli
+     etiket, altında girdi -- hangi kutunun ne olduğu (Model mi Renk mi)
+     hâlâ belli olsun diye, ama eski uzun label'lardan ("Başlangıç:" gibi)
+     çok daha az yer kaplasın diye. */
+  .arama-tek-satir {
+    display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+    margin-top: 10px;
   }
-  .combo-grubu { display: flex; flex-direction: column; gap: 4px; }
-  .combo-grubu label { margin: 0; }
-  .combo-grubu select {
-    padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 4px;
-    font-size: 13px; min-width: 160px; background: #fff;
+  .arama-grup { display: flex; flex-direction: column; gap: 3px; }
+  .arama-grup label {
+    font-size: 10px; font-weight: 700; color: #6b7280; text-transform: uppercase;
+    letter-spacing: 0.02em;
   }
-  .combo-satiri button { margin-top: 0; }
+  .arama-grup-genel { flex: 1 1 200px; min-width: 170px; }
+  .arama-grup-genel input[type=text] { width: 100%; }
+  .arama-grup select { width: 116px; }
+  .arama-grup input[type=date] { width: 126px; }
+  .arama-tarih-ayrac { padding-bottom: 8px; color: #9ca3af; font-size: 13px; }
+  .arama-hizli-tarih { width: 118px; }
 
-  /* Tarih aralığı formu: Başlangıç + Bitiş + hızlı butonlar (Bugün/Dün/
-     Bu Hafta/Bu Ay/Geçen Ay/Bu Yıl) AYNI SATIRDA -- .tarih-satiri hepsini
-     tek bir flex satırına alıyor, butonlar Bitiş kutusunun YANINDA durur
-     (altında değil). Dar ekranda flex-wrap sayesinde alta sarkar. */
-  .tarih-satiri { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
-  .tarih-satiri label { margin-top: 0; }
-  .tarih-buton-satiri { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 0; margin-left: 6px; }
-  .tarih-buton-satiri button { margin-top: 0; }
+  /* Temizle: <button> DEĞİL, düz "/" linkine giden bir <a> -- tüm alanları
+     sıfırlayıp sayfayı varsayılan (bu ay) görünümle yeniden yükler.
+     a.buton-ikincil: .buton-ikincil normalde <button> için (aşağıdaki
+     kural) -- <a>'ya da uygulandığı için, <button>'ın taban CSS'inden
+     (tag selector "button") gelen ama <a>'ya otomatik gelmeyen özellikleri
+     (kenar yuvarlama, imleç, kutu gibi davranma) elle ekliyoruz. */
+  a.buton-ikincil {
+    display: inline-block; text-decoration: none; border-radius: 4px; cursor: pointer;
+  }
   .buton-ikincil {
     background: #eef1f5; color: #1f2937; border: 1px solid #cbd5e1;
     padding: 7px 12px; font-size: 12px;
@@ -474,24 +627,89 @@ ORTAK_STIL = """
     background: #fff;
     border-radius: 8px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    /* overflow-x: auto -- geniş tabloyu (11 sütun) dar ekranda yatay
+       kaydırabilmek için. NOT: bu satırı tablo başlığını (thead) sabit
+       (sticky) yapmak için KULLANMA -- aşağıdaki thead CSS'inin
+       üstündeki notta anlatıldığı gibi, bu ikisi Chrome'da BİRLİKTE
+       ÇALIŞMIYOR (canlı testle doğrulandı), sticky satırlar veri
+       satırlarının üstüne biniyor. */
     overflow-x: auto;
     margin-bottom: 24px;
   }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { border: 1px solid #eef0f2; padding: 7px 10px; text-align: left; white-space: nowrap; }
+  /* ÖNEMLİ (2026-09-08, İKİNCİ deneme -- tablo başlığını da sabit üst
+     barın altına yapıştırma fikri TAMAMEN GERİ ALINDI): İlk denemede
+     "position: sticky" + JS ile ölçülen --sabit-yukseklik/--baslik-
+     satiri-yukseklik değişkenleri kullanılmıştı. Canlı tarayıcıda
+     (Chromium 141, Playwright ile) test edilince şu kanıtlandı: bu tablo
+     .tablo-sarmalayici içinde ve o kutuda "overflow-x: auto" var --
+     CSS Overflow spesifikasyonu gereği bu, kutuyu position:sticky
+     elemanları için bir "scroll container" yapıyor, ve kutu KENDİSİ
+     bağımsız dikey kaydırma yapmadığından (sayfayla birlikte doğal
+     akışta kayıyor), İÇİNDEKİ sticky satırlar ASLA gerçekten yapışmıyor
+     -- ya sayfayla birlikte kayıp gözden kayboluyor (top:0 iken, fark
+     edilmesi zor) ya da (top sıfırdan büyükken, tam burada olduğu gibi)
+     veri satırlarının TAM ÜSTÜNE BİNİYOR ("1 kayıt var ama görünmüyor +
+     2 boş satır" hatası buradan geliyordu). "overflow-y: clip" ile bu
+     sorunu atlatmayı DENEDİK -- Chrome bunu "hidden" ile AYNI şekilde
+     ele alıyor (canlı testte doğrulandı), yani ÇÖZMEDİ. Güvenli ve
+     doğrulanmış çözüm: bu tablonun KENDİ başlığını sabitlemekten
+     TAMAMEN VAZGEÇMEK -- üst navigasyon/arama/kart barı (.sabit-ust,
+     .tablo-sarmalayici'nin DIŞINDA olduğu için bu sorundan etkilenmiyor)
+     hâlâ ekranda sabit kalıyor, sadece tablo başlığı artık NORMAL
+     (kaydırınca sayfayla birlikte kayan) bir başlık -- yıllardır
+     çalışan, basit ve güvenilir hali. */
   thead tr.baslik-satiri th {
     background: #041e42; color: #fff; cursor: pointer; user-select: none;
-    position: sticky; top: 0;
   }
   thead tr.baslik-satiri th:hover { background: #0a2d5e; }
   thead tr.baslik-satiri th::after { content: " ⇅"; opacity: 0.5; font-size: 11px; }
   thead tr.baslik-satiri th[data-siralama="artan"]::after { content: " ▲"; opacity: 1; }
   thead tr.baslik-satiri th[data-siralama="azalan"]::after { content: " ▼"; opacity: 1; }
-  thead tr.filtre-satiri th { background: #f3f4f6; padding: 4px 6px; cursor: default; }
-  thead tr.filtre-satiri th::after { content: ""; }
-  thead tr.filtre-satiri input {
-    width: 100%; padding: 5px 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 12px;
+  thead tr.filtre-satiri th {
+    background: #f3f4f6; padding: 4px 6px; cursor: default;
   }
+  thead tr.filtre-satiri th::after { content: ""; }
+
+  /* Sütun başlığının altındaki "Excel benzeri" filtre butonu (bkz.
+     ORTAK_JS: sutunFiltrePopupAc/filtreleUygula). Filtre AKTİFSE
+     (.sfp-aktif) mavi renkte, değilse gri/nötr durur. */
+  .sutun-filtre-buton {
+    width: 100%; padding: 5px 6px; border: 1px solid #d1d5db; border-radius: 4px;
+    font-size: 11px; background: #fff; color: #4b5563; cursor: pointer;
+    margin-top: 0; text-align: left;
+  }
+  .sutun-filtre-buton:hover { background: #f3f4f6; }
+  .sutun-filtre-buton.sfp-aktif { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; font-weight: 600; }
+
+  /* Sütun filtre popup'ı -- document.body'ye EKLENIYOR (tablo hücresinin
+     İÇİNE değil), çünkü hücre içine sığdırmaya çalışmak taşma/kırpılma
+     sorunu çıkarır. JS ile th'nin altına konumlandırılıyor. */
+  .sutun-filtre-panel {
+    position: absolute; z-index: 500; background: #fff; border: 1px solid #cbd5e1;
+    border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+    padding: 10px; width: 240px; font-size: 13px; white-space: normal;
+  }
+  .sutun-filtre-panel .sfp-arama {
+    width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px;
+    font-size: 12px; margin-bottom: 8px;
+  }
+  .sutun-filtre-panel .sfp-hizli { font-size: 11px; margin-bottom: 6px; }
+  .sutun-filtre-panel .sfp-hizli a { color: #2563eb; text-decoration: none; }
+  .sutun-filtre-panel .sfp-hizli a:hover { text-decoration: underline; }
+  .sutun-filtre-panel .sfp-liste {
+    max-height: 220px; overflow-y: auto; border: 1px solid #eef0f2; border-radius: 4px;
+    padding: 4px 6px; margin-bottom: 8px;
+  }
+  .sutun-filtre-panel .sfp-oge {
+    display: flex; align-items: center; gap: 6px; padding: 3px 2px;
+    font-size: 12.5px; font-weight: 400; cursor: pointer;
+  }
+  .sutun-filtre-panel .sfp-oge input { margin: 0; }
+  .sutun-filtre-panel .sfp-butonlar { display: flex; gap: 6px; }
+  .sutun-filtre-panel .sfp-butonlar button { flex: 1; margin-top: 0; padding: 6px 8px; font-size: 12px; }
+
   tbody tr.veri-satiri { cursor: pointer; }
   tbody tr.veri-satiri:nth-child(even) { background: #fafbfc; }
   tbody tr.veri-satiri:hover { background: #eef4ff; }
@@ -543,29 +761,6 @@ function sirala(tabloId, kolonIndex) {
   satirlar.forEach(function (satir) { tbody.appendChild(satir); });
   basliklar.forEach(function (el) { el.removeAttribute('data-siralama'); });
   th.setAttribute('data-siralama', artan ? 'artan' : 'azalan');
-}
-
-// Filtre kutusuna yazdıkça çağrılır. Aynı şekilde tablo "bos" ise çıkar.
-function filtrele(tabloId) {
-  var tablo = document.getElementById(tabloId);
-  if (!tablo) return;
-  var tbody = tablo.tBodies[0];
-  if (tbody.getAttribute('data-dolu') !== '1') return;
-
-  var girdiler = tablo.querySelectorAll('thead tr.filtre-satiri input');
-  var satirlar = tbody.querySelectorAll('tr.veri-satiri');
-
-  satirlar.forEach(function (satir) {
-    var goster = true;
-    girdiler.forEach(function (girdi, i) {
-      var deger = girdi.value.trim().toLocaleLowerCase('tr');
-      if (deger && satir.children[i]) {
-        var hucreMetni = satir.children[i].innerText.toLocaleLowerCase('tr');
-        if (hucreMetni.indexOf(deger) === -1) goster = false;
-      }
-    });
-    satir.style.display = goster ? '' : 'none';
-  });
 }
 
 // Satıra tıklanınca detay sayfasını KÜÇÜK, AYRI BİR PENCEREDE (popup) aç.
@@ -639,6 +834,263 @@ function tarihAyarla(tur) {
   document.getElementById('bitis-girdi').value = bitis;
   document.getElementById('tarih-arama-formu').submit();
 }
+
+// ------------------------------------------------------------------
+// Sütun bazlı "Excel benzeri" çoklu-seçim filtre (2026-09-08 eklendi)
+// ------------------------------------------------------------------
+// ÖĞRENME NOTU: Eskiden her sütunun altında serbest metin kutusu vardı
+// (yukarıda kaldırılan eski filtrele() fonksiyonu). Şimdi her sütun
+// başlığının altında "Filtrele ▾" butonu var -- tıklayınca o sütunda
+// GEÇEN TÜM FARKLI DEĞERLER onay kutulu bir liste halinde bir popup'ta
+// gösteriliyor, kullanıcı istediği kadarını seçip "Uygula"ya basıyor.
+// Birden fazla sütunda filtre varsa hepsi birlikte (VE mantığıyla)
+// uygulanıyor -- tıpkı Excel'deki sütun filtreleri gibi.
+//
+// _sutunFiltreDurumu: { tabloId: { kolonIndex: Set(seçili değerler) } }
+// Bir kolon için Set YOKSA, o kolonda filtre YOK demektir (tüm satırlar
+// o kolon için "geçer" sayılır) -- "hepsi seçili" ile "filtre yok" aynı
+// şey, bu yüzden "Uygula"da hepsi seçiliyse Set'i hiç saklamıyoruz.
+var _sutunFiltreDurumu = {};
+var _acikSutunFiltrePaneli = null;  // aynı anda tek panel açık olabilir
+
+function _hucreMetni(satir, kolonIndex) {
+  var hucre = satir.children[kolonIndex];
+  return hucre ? hucre.innerText.trim() : '';
+}
+
+// Bir tablonun bir kolonundaki TÜM farklı değerleri toplar (satır o an
+// başka bir filtreyle gizlenmiş olsa bile -- Excel'de de filtre listesi
+// diğer sütunlardaki filtrelerden etkilenmez, hep TÜM veriyi gösterir).
+function _kolonDegerleriTopla(tabloId, kolonIndex) {
+  var tablo = document.getElementById(tabloId);
+  var tbody = tablo.tBodies[0];
+  var degerler = [];
+  var gorulen = {};
+  tbody.querySelectorAll('tr.veri-satiri').forEach(function (satir) {
+    var v = _hucreMetni(satir, kolonIndex);
+    if (v === '') v = '(boş)';
+    if (!gorulen[v]) { gorulen[v] = true; degerler.push(v); }
+  });
+  degerler.sort(function (a, b) { return a.localeCompare(b, 'tr'); });
+  return degerler;
+}
+
+function sutunFiltrePopupAc(evt, tabloId, buton) {
+  evt.stopPropagation();
+  // Aynı butona tekrar basıldıysa panel aç/kapa gibi davranır.
+  if (_acikSutunFiltrePaneli && _acikSutunFiltrePaneli._buton === buton) {
+    sutunFiltrePopupKapat();
+    return;
+  }
+  sutunFiltrePopupKapat();  // başka bir panel açıksa önce onu kapat
+
+  var th = buton.closest('th');
+  var basliklar = Array.prototype.slice.call(th.parentElement.children);
+  var kolonIndex = basliklar.indexOf(th);
+
+  var degerler = _kolonDegerleriTopla(tabloId, kolonIndex);
+  if (!_sutunFiltreDurumu[tabloId]) _sutunFiltreDurumu[tabloId] = {};
+  var seciliSet = _sutunFiltreDurumu[tabloId][kolonIndex];  // undefined = hepsi seçili
+
+  var panel = document.createElement('div');
+  panel.className = 'sutun-filtre-panel';
+  panel._buton = buton;
+
+  var aramaKutu = document.createElement('input');
+  aramaKutu.type = 'text';
+  aramaKutu.className = 'sfp-arama';
+  aramaKutu.placeholder = 'değer ara...';
+  panel.appendChild(aramaKutu);
+
+  var hizli = document.createElement('div');
+  hizli.className = 'sfp-hizli';
+  var tumSec = document.createElement('a');
+  tumSec.href = '#';
+  tumSec.textContent = 'Tümünü Seç';
+  var tumKaldir = document.createElement('a');
+  tumKaldir.href = '#';
+  tumKaldir.textContent = 'Tümünü Kaldır';
+  hizli.appendChild(tumSec);
+  hizli.appendChild(document.createTextNode(' \\u00b7 '));
+  hizli.appendChild(tumKaldir);
+  panel.appendChild(hizli);
+
+  var liste = document.createElement('div');
+  liste.className = 'sfp-liste';
+  panel.appendChild(liste);
+
+  function ogeleriCiz(filtreMetni) {
+    liste.innerHTML = '';
+    degerler.forEach(function (deger) {
+      if (filtreMetni && deger.toLocaleLowerCase('tr').indexOf(filtreMetni) === -1) return;
+      var etiket = document.createElement('label');
+      etiket.className = 'sfp-oge';
+      var kutu = document.createElement('input');
+      kutu.type = 'checkbox';
+      kutu.value = deger;
+      kutu.checked = !seciliSet || seciliSet.has(deger);
+      etiket.appendChild(kutu);
+      etiket.appendChild(document.createTextNode(deger));
+      liste.appendChild(etiket);
+    });
+  }
+  ogeleriCiz('');
+
+  aramaKutu.addEventListener('input', function () {
+    ogeleriCiz(aramaKutu.value.trim().toLocaleLowerCase('tr'));
+  });
+  tumSec.addEventListener('click', function (e) {
+    e.preventDefault();
+    liste.querySelectorAll('input[type=checkbox]').forEach(function (k) { k.checked = true; });
+  });
+  tumKaldir.addEventListener('click', function (e) {
+    e.preventDefault();
+    liste.querySelectorAll('input[type=checkbox]').forEach(function (k) { k.checked = false; });
+  });
+
+  var butonlar = document.createElement('div');
+  butonlar.className = 'sfp-butonlar';
+  var uygulaBtn = document.createElement('button');
+  uygulaBtn.type = 'button';
+  uygulaBtn.textContent = 'Uygula';
+  var temizleBtn = document.createElement('button');
+  temizleBtn.type = 'button';
+  temizleBtn.className = 'buton-ikincil';
+  temizleBtn.textContent = 'Temizle';
+  butonlar.appendChild(uygulaBtn);
+  butonlar.appendChild(temizleBtn);
+  panel.appendChild(butonlar);
+
+  uygulaBtn.addEventListener('click', function () {
+    // Arama kutusu doluyken "Uygula"ya basılırsa, aramayla elenmiş
+    // (DOM'dan silinmiş) kutucuklar okunamaz -- bu yüzden önce arama
+    // metnini temizleyip listeyi TAM haliyle yeniden çiziyoruz, öyle
+    // okuyoruz (kullanıcının arama sırasında yaptığı işaretlemeler
+    // ogeleriCiz() her çağrıldığında seciliSet üzerinden korunmuyor
+    // olabileceğinden, önce mevcut işaretleri seciliSet'e yansıtmadan
+    // TEMİZ bir okuma yapmak yerine: arama kutusu boşken zaten TÜM
+    // değerler DOM'da olduğu için, normal akışta bu adım sadece bir
+    // güvenlik önlemi).
+    var tumKutular = liste.querySelectorAll('input[type=checkbox]');
+    var yeniSet = new Set();
+    var hepsiSecili = true;
+    tumKutular.forEach(function (k) { if (k.checked) yeniSet.add(k.value); else hepsiSecili = false; });
+    if (hepsiSecili) {
+      delete _sutunFiltreDurumu[tabloId][kolonIndex];
+    } else {
+      _sutunFiltreDurumu[tabloId][kolonIndex] = yeniSet;
+    }
+    filtreleUygula(tabloId);
+    sutunFiltrePopupKapat();
+  });
+  temizleBtn.addEventListener('click', function () {
+    delete _sutunFiltreDurumu[tabloId][kolonIndex];
+    filtreleUygula(tabloId);
+    sutunFiltrePopupKapat();
+  });
+
+  document.body.appendChild(panel);
+  var konum = th.getBoundingClientRect();
+  var solKenar = konum.left + window.scrollX;
+  var panelGenislik = 240;
+  if (solKenar + panelGenislik > window.scrollX + document.documentElement.clientWidth - 8) {
+    solKenar = window.scrollX + document.documentElement.clientWidth - panelGenislik - 8;
+  }
+  panel.style.left = Math.max(4, solKenar) + 'px';
+  panel.style.top = (konum.bottom + window.scrollY + 4) + 'px';
+
+  _acikSutunFiltrePaneli = panel;
+  document.addEventListener('click', _sutunFiltrePopupDisKapat);
+  document.addEventListener('keydown', _sutunFiltrePopupEscKapat);
+}
+
+function sutunFiltrePopupKapat() {
+  if (_acikSutunFiltrePaneli) {
+    _acikSutunFiltrePaneli.remove();
+    _acikSutunFiltrePaneli = null;
+  }
+  document.removeEventListener('click', _sutunFiltrePopupDisKapat);
+  document.removeEventListener('keydown', _sutunFiltrePopupEscKapat);
+}
+
+function _sutunFiltrePopupDisKapat(evt) {
+  if (_acikSutunFiltrePaneli && !_acikSutunFiltrePaneli.contains(evt.target)) {
+    sutunFiltrePopupKapat();
+  }
+}
+
+function _sutunFiltrePopupEscKapat(evt) {
+  if (evt.key === 'Escape') sutunFiltrePopupKapat();
+}
+
+// Bir tablonun TÜM sütunlarındaki aktif filtreleri (Set halinde saklanan)
+// birlikte (VE mantığıyla) uygular -- eskiden metin kutularını okuyan
+// filtrele() fonksiyonunun YERİNE geçti. Ayrıca her sütun başlığındaki
+// butona filtre aktifse .sfp-aktif class'ını ekler/kaldırır ki kullanıcı
+// hangi sütunlarda filtre olduğunu (ve kaç değer seçili olduğunu) görsün.
+function filtreleUygula(tabloId) {
+  var tablo = document.getElementById(tabloId);
+  if (!tablo) return;
+  var tbody = tablo.tBodies[0];
+  if (tbody.getAttribute('data-dolu') !== '1') return;
+
+  var durum = _sutunFiltreDurumu[tabloId] || {};
+  var satirlar = tbody.querySelectorAll('tr.veri-satiri');
+
+  satirlar.forEach(function (satir) {
+    var goster = true;
+    for (var kolonIndex in durum) {
+      var seciliSet = durum[kolonIndex];
+      if (!seciliSet) continue;
+      var deger = _hucreMetni(satir, kolonIndex);
+      if (deger === '') deger = '(boş)';
+      if (!seciliSet.has(deger)) { goster = false; break; }
+    }
+    satir.style.display = goster ? '' : 'none';
+  });
+
+  var basliklar = tablo.querySelectorAll('thead tr.filtre-satiri th');
+  basliklar.forEach(function (th, kolonIndex) {
+    var btn = th.querySelector('.sutun-filtre-buton');
+    if (!btn) return;
+    if (durum[kolonIndex]) {
+      btn.classList.add('sfp-aktif');
+      btn.textContent = 'Filtrele ▾ (' + durum[kolonIndex].size + ')';
+    } else {
+      btn.classList.remove('sfp-aktif');
+      btn.textContent = 'Filtrele ▾';
+    }
+  });
+}
+
+// ------------------------------------------------------------------
+// "Veri Çek" durumunu (arka planda çalışan thread'in ilerlemesini)
+// birkaç saniyede bir sorgulayıp (polling) üst bardaki küçük yazıyı
+// günceller. Sayfada #veri-cek-durum YOKSA (örn. detay sayfası) hiçbir
+// şey yapmaz.
+// ------------------------------------------------------------------
+function _veriCekDurumGuncelle() {
+  var kutu = document.getElementById('veri-cek-durum');
+  if (!kutu) return;
+  fetch('/veri-cek/durum').then(function (r) { return r.json(); }).then(function (d) {
+    if (d.calisiyor) {
+      kutu.className = 'veri-cek-durum vc-calisiyor';
+      kutu.textContent = 'Çekiliyor... (' + (d.baslangic || '') + ' - ' + (d.bitis || '') + ')';
+      setTimeout(_veriCekDurumGuncelle, 3000);
+    } else if (d.hata) {
+      kutu.className = 'veri-cek-durum vc-hata';
+      kutu.textContent = d.hata;
+    } else if (d.bitis_zamani) {
+      kutu.className = 'veri-cek-durum vc-tamam';
+      kutu.textContent = 'Tamamlandı (' + d.bitis_zamani + '): ' + d.eklenen + ' eklendi, ' + d.atlanan + ' atlandı' +
+        (d.basarisiz_parca ? ', ' + d.basarisiz_parca + ' parça başarısız' : '') + '.';
+    }
+  }).catch(function () {});
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  _veriCekDurumGuncelle();
+});
 </script>
 """
 
@@ -656,14 +1108,28 @@ ANA_SAYFA = """
 </head>
 <body>
 
+<div class="sabit-ust">
 <div class="ust-serit">
   <div>
     <h1>ERK Araç Database</h1>
-    <div class="alt-yazi">Sadece görüntüleme amaçlı -- veri eklemez/değiştirmez.</div>
+    <div class="alt-yazi">Not: "Veri Çek" ile DMS'ten yeni fatura çekebilirsiniz -- geri kalanı sadece görüntüleme.</div>
+  </div>
+  <div class="ust-serit-sag">
+    <form class="veri-cek-formu" method="post" action="/veri-cek">
+      <label>Veri Çek:</label>
+      <input type="date" name="baslangic" required>
+      <span>-</span>
+      <input type="date" name="bitis" required>
+      <button type="submit">Çek</button>
+    </form>
+    <div class="veri-cek-durum" id="veri-cek-durum"></div>
   </div>
 </div>
+{% if veri_cek_hata %}
+<div class="uyari-bar">{{ veri_cek_hata }}</div>
+{% endif %}
 
-<div class="icerik">
+<div class="icerik-ust">
 
   <div class="kart-satiri">
     <a class="kart-link" href="/?gorunum=tum">
@@ -717,15 +1183,30 @@ ANA_SAYFA = """
   </div>
 
   <div class="arama-kartlari">
-    <form class="arama-formu" method="get">
-      <b>Ara / Filtrele</b> <span class="bilgi-notu">(şase, motor no, model, renk, plaka, fatura no; ya da alttan model/renk/yakıt tipi seçerek)</span><br>
-      <div class="genel-arama-satiri">
-        <label>Ne arıyorsun:</label>
-        <input type="text" name="q" value="{{ arama_metni }}" placeholder="örn. KMHM341..., 34 ABC 123, kırmızı, Tucson...">
-        <button type="submit" name="eylem" value="ara">Ara</button>
-      </div>
-      <div class="combo-satiri">
-        <div class="combo-grubu">
+    <!-- TEK kutu, TEK form, TEK SATIR (2026-09-08, üçüncü sürüm: önceki
+         hal -- Ara/Model-Renk-Yakıt/Tarih/Ara-Temizle diye üst üste dört
+         satır -- "sayfanın yarısından fazlasını kaplıyor, dağınık, çorba
+         gibi" diye beğenilmedi; hepsi TEK satıra indirildi, aralarda
+         çizgi/bölüm yok, sadece küçük etiketli gruplar yan yana). Şase/
+         motor/model/renk/plaka/fatura no metin araması, Model/Dış Renk/
+         Yakıt Tipi comboboxları, tarih aralığı VE hızlı tarih seçimi
+         hepsi AYNI formda -- TEK "Ara" butonu hangi alan(lar) doluysa
+         onunla arar, yanındaki "Temizle" linki tüm alanları sıfırlayıp
+         "/" adresine (varsayılan görünüme) döner.
+         ÖNCELİK SIRASI (anasayfa() route'undaki mantıkla BİREBİR aynı --
+         bkz. oradaki docstring): combobox seçimi varsa ONA göre arar,
+         yoksa metin araması varsa ONA göre arar, o da yoksa tarih
+         aralığına göre arar. Aynı anda birden fazlası doldurulursa
+         hepsi BİRLİKTE (VE mantığıyla) BİRLEŞTİRİLMİYOR -- bu öncelik
+         sırasındaki İLK doluyu kullanır. -->
+    <form class="arama-formu arama-formu-birlesik" method="get" id="tarih-arama-formu">
+      <b>Ara / Filtrele</b>
+      <div class="arama-tek-satir">
+        <div class="arama-grup arama-grup-genel">
+          <label>Ne arıyorsun</label>
+          <input type="text" name="q" value="{{ arama_metni }}" placeholder="şase, motor no, model, renk, plaka, fatura no...">
+        </div>
+        <div class="arama-grup">
           <label>Model</label>
           <select name="model">
             <option value="">Tümü</option>
@@ -734,7 +1215,7 @@ ANA_SAYFA = """
             {% endfor %}
           </select>
         </div>
-        <div class="combo-grubu">
+        <div class="arama-grup">
           <label>Dış Renk</label>
           <select name="renk">
             <option value="">Tümü</option>
@@ -743,7 +1224,7 @@ ANA_SAYFA = """
             {% endfor %}
           </select>
         </div>
-        <div class="combo-grubu">
+        <div class="arama-grup">
           <label>Yakıt Tipi</label>
           <select name="yakit">
             <option value="">Tümü</option>
@@ -755,29 +1236,37 @@ ANA_SAYFA = """
             {% endif %}
           </select>
         </div>
-        <button type="submit" name="eylem" value="filtrele">Filtrele</button>
-      </div>
-    </form>
-
-    <form class="arama-formu" method="get" id="tarih-arama-formu">
-      <b>Tarih aralığına göre ara</b><br>
-      <div class="tarih-satiri">
-        <label>Başlangıç:</label>
-        <input type="date" name="baslangic" id="baslangic-girdi" value="{{ baslangic_deger }}">
-        <label>Bitiş:</label>
-        <input type="date" name="bitis" id="bitis-girdi" value="{{ bitis_deger }}">
-        <div class="tarih-buton-satiri">
-          <button type="submit">Ara</button>
-          <button type="button" class="buton-ikincil" onclick="tarihAyarla('bugun')">Bugün</button>
-          <button type="button" class="buton-ikincil" onclick="tarihAyarla('dun')">Dün</button>
-          <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-hafta')">Bu Hafta</button>
-          <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-ay')">Bu Ay</button>
-          <button type="button" class="buton-ikincil" onclick="tarihAyarla('gecen-ay')">Geçen Ay</button>
-          <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-yil')">Bu Yıl</button>
+        <div class="arama-grup">
+          <label>Başlangıç</label>
+          <input type="date" name="baslangic" id="baslangic-girdi" value="{{ baslangic_deger }}">
         </div>
+        <div class="arama-tarih-ayrac">&ndash;</div>
+        <div class="arama-grup">
+          <label>Bitiş</label>
+          <input type="date" name="bitis" id="bitis-girdi" value="{{ bitis_deger }}">
+        </div>
+        <div class="arama-grup">
+          <label>Hızlı Tarih</label>
+          <select class="arama-hizli-tarih" onchange="if (this.value) { tarihAyarla(this.value); }">
+            <option value="">Seç...</option>
+            <option value="bugun">Bugün</option>
+            <option value="dun">Dün</option>
+            <option value="bu-hafta">Bu Hafta</option>
+            <option value="bu-ay">Bu Ay</option>
+            <option value="gecen-ay">Geçen Ay</option>
+            <option value="bu-yil">Bu Yıl</option>
+          </select>
+        </div>
+        <button type="submit">Ara</button>
+        <a href="/" class="buton-ikincil buton-link">Temizle</a>
       </div>
     </form>
   </div>
+
+</div>
+</div>
+
+<div class="icerik-alt">
 
   <h2>{{ baslik_metni }} ({{ sonuclar|length }} kayıt{{ ", en fazla 500 gösteriliyor" if sonuclar|length >= 500 else "" }})</h2>
   <p class="bilgi-notu">Bir satıra tıklayınca o aracın tüm detayları (özellikler, faturalar, gümrük bilgisi) küçük, ayrı bir PENCEREDE açılır -- bu sayfa olduğu gibi kalır.</p>
@@ -789,17 +1278,17 @@ ANA_SAYFA = """
         <th>Şase</th><th>Motor No</th><th>Model</th><th>Model Yılı</th><th>Dış Renk</th><th>İç Renk</th><th>Yakıt</th><th>Plaka</th><th>Fatura No</th><th>Fatura Tarihi</th><th>Toplam</th>
       </tr>
       <tr class="filtre-satiri">
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-sonuclar')" placeholder="ara..."></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-sonuclar', this)">Filtrele ▾</button></th>
       </tr>
     </thead>
     <tbody data-dolu="{{ '1' if sonuclar else '0' }}">
@@ -842,7 +1331,10 @@ ANA_SAYFA = """
 
 
 # ------------------------------------------------------------------
-# Detay sayfası şablonu -- "/arac/<sasi_no>"
+# Detay sayfası şablonu -- "/arac/<sasi_no>" (ORTAK_JS'i kullanır ama
+# .sabit-ust'u YOK -- bu sayfada sticky üst bar/veri çek yok. Tablo
+# başlıkları zaten HİÇBİR sayfada sabit değil, bkz. ORTAK_STIL'deki
+# thead notu.)
 # ------------------------------------------------------------------
 DETAY_SAYFA = """
 <!doctype html>
@@ -889,15 +1381,15 @@ DETAY_SAYFA = """
         <th>Fatura No</th><th>Tarih</th><th>Bayi</th><th>Liste Fiyat</th><th>İndirim</th><th>İndirimli Fiyat</th><th>KDV %</th><th>Toplam</th><th>Durum</th>
       </tr>
       <tr class="filtre-satiri">
-        <th><input type="text" oninput="filtrele('tablo-fatura')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-fatura')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-fatura')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-fatura')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-fatura')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-fatura')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-fatura')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-fatura')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-fatura')" placeholder="ara..."></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-fatura', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-fatura', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-fatura', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-fatura', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-fatura', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-fatura', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-fatura', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-fatura', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-fatura', this)">Filtrele ▾</button></th>
       </tr>
     </thead>
     <tbody data-dolu="{{ '1' if faturalar else '0' }}">
@@ -930,11 +1422,11 @@ DETAY_SAYFA = """
         <th>Talep Tarihi</th><th>Talep No</th><th>Fatura Tarihi</th><th>Fatura No</th><th>Gümrük Müdürlüğü</th>
       </tr>
       <tr class="filtre-satiri">
-        <th><input type="text" oninput="filtrele('tablo-gumruk')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-gumruk')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-gumruk')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-gumruk')" placeholder="ara..."></th>
-        <th><input type="text" oninput="filtrele('tablo-gumruk')" placeholder="ara..."></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-gumruk', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-gumruk', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-gumruk', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-gumruk', this)">Filtrele ▾</button></th>
+        <th><button type="button" class="sutun-filtre-buton" onclick="sutunFiltrePopupAc(event, 'tablo-gumruk', this)">Filtrele ▾</button></th>
       </tr>
     </thead>
     <tbody data-dolu="{{ '1' if gumruk else '0' }}">
@@ -967,16 +1459,19 @@ DETAY_SAYFA = """
 
 @app.route("/")
 def anasayfa():
-    """Ana sayfa: 8 tıklanabilir özet kartı + genel arama kutusu + Model/
-    Dış Renk/Yakıt Tipi comboboxları + tarih aralığı arama formu -- hepsi
-    AYNI özet liste tablosunu doldurur.
+    """Ana sayfa: 8 tıklanabilir özet kartı + TEK bir arama/filtre formu
+    (genel arama + Model/Dış Renk/Yakıt Tipi comboboxları + tarih aralığı,
+    hepsi AYNI form/TEK "Ara" butonu -- 2026-09-08: eskiden ayrı ayrı
+    formlardı, "hepsinde ayrı buton olmasına gerek yok" diyerek
+    birleştirildi) -- hepsi AYNI özet liste tablosunu doldurur.
 
-    ÖNCELİK SIRASI (hangi arama önce kontrol edilir):
+    ÖNCELİK SIRASI (hangi arama önce kontrol edilir -- form TEK olduğu
+    için birden fazla alan AYNI ANDA dolu gelebilir, bu durumda hepsi
+    BİRLİKTE birleştirilmiyor, bu sıradaki İLK dolu olan kullanılıyor):
       1) ?gorunum=tum       -> tüm araçlar (Toplam Araç kartı)
       2) ?gorunum=ithal     -> gümrük kaydı olan araçlar (o kart)
-      3) ?eylem=filtrele    -> Model/Dış Renk/Yakıt Tipi comboboxları
-                               (üçü de boşsa bile "Filtrele" basıldıysa
-                               bu dala girer, sonuç tüm araçlar olur)
+      3) ?model=/?renk=/?yakit= (herhangi biri doluysa) -> Model/Dış
+                               Renk/Yakıt Tipi comboboxlarına göre filtre
       4) ?q=...             -> genel arama (şase/motor/model/renk/plaka/fatura)
       5) ?baslangic=&bitis= -> tarih aralığı (diğer 6 kart da buraya düşer)
       6) hiçbiri yoksa      -> varsayılan: bu ayı otomatik göster
@@ -1027,10 +1522,14 @@ def anasayfa():
     baslangic_deger = request.args.get("baslangic", "").strip()
     bitis_deger = request.args.get("bitis", "").strip()
     gorunum = request.args.get("gorunum", "").strip()
-    eylem = request.args.get("eylem", "").strip()
     model_secili = request.args.get("model", "").strip()
     renk_secili = request.args.get("renk", "").strip()
     yakit_secili = request.args.get("yakit", "").strip()
+    # "Veri Çek" butonu bir işlemi REDDETTİĞİNDE (bkz. veri_cek_baslat())
+    # ?veri_cek_hata=... ile buraya geri yönlendiriyor -- üst barın altında
+    # kırmızı bir uyarı şeridi olarak gösteriliyor (bkz. ANA_SAYFA'daki
+    # {% if veri_cek_hata %} bloğu).
+    veri_cek_hata = request.args.get("veri_cek_hata", "").strip()
 
     # Model/Dış Renk/Yakıt Tipi comboboxlarını dolduracak benzersiz
     # değerler -- HER istekte çekiliyor (sayfa yenilendiğinde combobox
@@ -1045,7 +1544,7 @@ def anasayfa():
 
     hicbir_parametre_yok = (
         not arama_metni and not baslangic_deger and not bitis_deger
-        and not gorunum and not eylem
+        and not gorunum
         and not model_secili and not renk_secili and not yakit_secili
     )
 
@@ -1071,7 +1570,7 @@ def anasayfa():
         arama_yapildi = True
         sonuclar = _sorgu_calistir(ITHAL_ARACLAR_SORGUSU, [])
         baslik_metni = "Gümrük kaydı olan araçlar"
-    elif eylem == "filtrele":
+    elif model_secili or renk_secili or yakit_secili:
         arama_yapildi = True
         # NOT: yakit_secili ÜÇ KERE veriliyor -- FILTRE_SORGUSU'ndaki yakıt
         # koşulunda üç %s var (boş mu / "Tanımsız" mı / gerçek isme eşit mi,
@@ -1130,7 +1629,72 @@ def anasayfa():
         yakit_secili=yakit_secili,
         yakit_tanimsiz_deger=YAKIT_TANIMSIZ_DEGER,
         yakit_tanimsiz_sayisi=yakit_tanimsiz_sayisi,
+        veri_cek_hata=veri_cek_hata,
     )
+
+
+@app.route("/veri-cek", methods=["POST"])
+def veri_cek_baslat():
+    """"Veri Çek" formunun POST hedefi. Arka planda etl.run_range()'i
+    başlatıp HEMEN "/" adresine geri döner -- run_range bitene kadar
+    beklemez (bkz. yukarıdaki "Veri Çek butonu" bölümündeki ÖĞRENME NOTU).
+    Tarihler geçersizse, başlangıç bitişten sonraysa, ya da zaten bir
+    çekim çalışıyorsa YENİ bir çekim BAŞLATMAZ -- kullanıcıya
+    ?veri_cek_hata=... ile bir uyarı mesajı gösterip "/" adresine döner.
+
+    NOT: 28 günden uzun aralıklar burada AYRICA parçalanmıyor -- etl.py
+    zaten run_range() içinde bunu otomatik yapıyor (varsayılan
+    chunk_days=28), o mantık burada TEKRAR YAZILMADI (tek doğru kaynak
+    etl.py)."""
+    baslangic_metin = request.form.get("baslangic", "").strip()
+    bitis_metin = request.form.get("bitis", "").strip()
+
+    try:
+        baslangic = dt.datetime.strptime(baslangic_metin, "%Y-%m-%d").date()
+        bitis = dt.datetime.strptime(bitis_metin, "%Y-%m-%d").date()
+    except ValueError:
+        return redirect(url_for(
+            "anasayfa",
+            veri_cek_hata="Veri çekme başlatılamadı: geçerli bir başlangıç/bitiş tarihi girin.",
+        ))
+
+    if baslangic > bitis:
+        return redirect(url_for(
+            "anasayfa",
+            veri_cek_hata="Veri çekme başlatılamadı: başlangıç tarihi bitiş tarihinden sonra olamaz.",
+        ))
+
+    with _VERI_CEK_KILIT:
+        if _VERI_CEK_DURUMU["calisiyor"]:
+            return redirect(url_for(
+                "anasayfa",
+                veri_cek_hata="Zaten bir veri çekme işlemi çalışıyor -- bitmesini bekleyin.",
+            ))
+        _VERI_CEK_DURUMU.update({
+            "calisiyor": True,
+            "baslangic": baslangic.isoformat(),
+            "bitis": bitis.isoformat(),
+            "eklenen": None,
+            "atlanan": None,
+            "basarisiz_parca": None,
+            "hata": None,
+            "baslama_zamani": dt.datetime.now().strftime("%H:%M:%S"),
+            "bitis_zamani": None,
+        })
+
+    thread = threading.Thread(target=_veri_cek_calistir, args=(baslangic, bitis), daemon=True)
+    thread.start()
+
+    return redirect(url_for("anasayfa"))
+
+
+@app.route("/veri-cek/durum")
+def veri_cek_durum():
+    """Üst bardaki JS'in (bkz. ORTAK_JS: _veriCekDurumGuncelle) birkaç
+    saniyede bir sorguladığı JSON durum uç noktası. _VERI_CEK_KILIT ile
+    korunan global sözlüğü olduğu gibi JSON olarak döner."""
+    with _VERI_CEK_KILIT:
+        return jsonify(dict(_VERI_CEK_DURUMU))
 
 
 @app.route("/arac/<sasi_no>")

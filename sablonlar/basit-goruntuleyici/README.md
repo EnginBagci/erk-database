@@ -38,8 +38,24 @@ kendisi) aynı kalır.
    (popup -- `window.open` + genişlik/yükseklik verilerek, "_blank" DEĞİL)
    açılır. Ana sayfa (liste + arama sonucu) olduğu sekmede hiç
    değişmeden, hiç kaybolmadan kalır.
-4. Tablolarda: sütun başlığına tıklayınca sıralama, başlığın altındaki
-   kutucuklara yazınca anlık (sayfa yenilenmeden) filtreleme.
+4. Tablolarda: sütun başlığına tıklayınca sıralama; başlığın altındaki
+   "Filtrele ▾" butonuna tıklayınca **EXCEL BENZERİ çoklu-seçim filtre
+   popup'ı** açılır (o kolonda o an tabloda geçen tüm farklı değerler
+   onay kutularıyla listelenir, birden fazlası işaretlenip "Uygula"ya
+   basılabilir, üstte küçük bir arama kutusuyla liste daraltılabilir).
+   Birden fazla sütunda filtre varsa hepsi birlikte -- VE mantığıyla --
+   uygulanır. Tamamen tarayıcıda (JS ile) çalışır, hiçbir sunucu isteği
+   yapmaz (bkz. `ortak.py` ORTAK_JS: `sutunFiltrePopupAc`/
+   `filtreleUygula`/`sutunFiltrePopupKapat`). ESKİDEN her sütunun altında
+   serbest metin girilen bir kutu vardı -- erk-database'de 2026-09-08'de
+   bu desene geçildi, bu şablona da o gün eklendi. Yeni bir tablo
+   eklerken sütun başlıkları şu şekilde olmalı:
+   ```html
+   <th><button type="button" class="sutun-filtre-buton"
+       onclick="sutunFiltrePopupAc(event, 'tabloId', this)">Filtrele ▾</button></th>
+   ```
+   (`'tabloId'` kısmını kendi `<table id="...">` değerinle değiştir --
+   bkz. `ornek_uygulama.py`'deki `tablo-liste` örneği.)
 5. Bir arama formunda "Ara" butonunun yanına kısayol butonları (örn.
    Dün/Bu Ay/Geçen Ay/Bu Yıl) koyacaksan bunlar Ara butonunun ALTINA
    DEĞİL, AYNI SATIRA (yanına) konur -- `ortak.py`'deki `.buton-satiri`/
@@ -55,6 +71,31 @@ kendisi) aynı kalır.
    görünüm. Renkli özet/istatistik kartları İSTENİYORSA `ortak.py`'deki
    `.kart-satiri`/`.kart-link`/`.kart` CSS'i kullanılır (erk-database'in
    görüntüleyicisinde 8 kart olarak kullanılıyor).
+7. İstenirse sayfanın üst kısmı (üst şerit + varsa kartlar/arama
+   formları) aşağı kaydırınca EKRANDA SABİT (position: sticky) kalabilir
+   -- erk-database'de "aşağı inince neyin ne olduğu belli olmuyordu" diye
+   eklendi. Bunun için sabit kalmasını istediğin bölümü
+   `<div class="sabit-ust">...</div>` ile sar (CSS'te `position: sticky;
+   top: 0;` -- `ortak.py`'ye eklenmesi gerekiyorsa bkz. erk-database'deki
+   `src/viewer.py` ANA_SAYFA şablonundaki `.sabit-ust` kuralı, birebir
+   kopyalanabilir).
+   **ÖNEMLİ -- ERK-DATABASE'DE 2026-09-08'DE CANLI TARAYICI TESTİYLE
+   (Playwright/Chromium) DOĞRULANMIŞ BİR HATA:** tablonun KENDİ `thead`'ini
+   de sticky yapıp `.sabit-ust`'un hemen altına yapıştırmaya ÇALIŞMA.
+   `.tablo-sarmalayici`'nin (geniş tabloyu yatay kaydırmak için gereken)
+   `overflow-x: auto`'su, CSS kuralı gereği bu kutuyu İÇİNDEKİ
+   `position:sticky` satırlar için bir "scroll container" yapıyor --
+   thead SAYFAYA göre değil bu kutuya göre sabitlenmeye çalışıp veri
+   satırlarının ÜSTÜNE biniyor / kayboluyor (Chromium'da `overflow-y:
+   clip` da bunu ÇÖZMÜYOR -- denenip disproven edildi, `clip` bu
+   tarayıcıda `hidden` ile aynı şekilde scroll container oluşturuyor).
+   Daha önce `ortak.py`'de bunun için `--sabit-yukseklik`/
+   `--baslik-satiri-yukseklik` CSS değişkenleri ve bir
+   `sabitBoyutlariGuncelle()` JS fonksiyonuyla thead'i de sticky yapan bir
+   desen vardı -- bu KALDIRILDI, çünkü hiçbir zaman düzgün çalışmadı.
+   Doğru/güvenli desen: SADECE `.sabit-ust` sticky olsun, tablonun kendi
+   `thead`'i normal (static) kalsın -- `erk-database/src/viewer.py`
+   ANA_SAYFA şablonundaki güncel hale bak.
 
 ## Dosyalar
 

@@ -65,7 +65,7 @@ def _parse_api_date(value):
 
 
 def yakit_tipi_belirle(motor_no):
-    """Motor numarasının İLK HARFİNE bakarak yakıt tipini tahmin eder.
+    """Motor numarasının başına bakarak yakıt tipini tahmin eder.
 
     KASITLI TASARIM (kullanıcı isteği, 2026-09-08): DMS API'sinde ayrı bir
     "yakıt tipi" alanı YOK -- kullanıcı, motor no'nun ilk harfinin yakıt
@@ -77,13 +77,27 @@ def yakit_tipi_belirle(motor_no):
     tipi "bilinmiyor" sayılır, HATA VERMEZ. İleride API gerçek bir
     yakıt/motor detay bilgisi sağlarsa bu tahmin yerine o veri kullanılmalı.
 
-    Hem burada (yeni araç eklenirken) hem de src/backfill_yakit_tipi.py'de
-    (geçmişte eklenmiş araçlar için tek seferlik) KULLANILIYOR -- mantığı
-    iki yerde ayrı ayrı yazmamak için tek fonksiyonda toplandı.
+    İSTİSNA (kullanıcı gözlemi, 2026-09-08): IONIQ modellerinde motor no
+    "DD" ile başlıyor ama bu araçlar aslında ELEKTRİKLİ -- genel "D ile
+    başlayan = Dizel" kuralına UYMUYORLAR. Bu yüzden "DD" özel durumu genel
+    D kuralından ÖNCE kontrol ediliyor (sonra kontrol edilseydi hiç
+    yakalanmazdı, çünkü "DD..." zaten "D" ile de başlıyor). Yeni bir
+    istisna daha çıkarsa (örn. başka bir model başka bir harfle çakışırsa)
+    aynı şekilde -- genel tek harf kuralından ÖNCE -- buraya eklenmeli.
+
+    Hem burada (yeni araç eklenirken) hem de src/backfill_yakit_tipi.py
+    (geçmişte eklenmiş, henüz hiç yakıt tipi atanmamış araçlar için tek
+    seferlik) hem de src/yakit_tipi_yeniden_hesapla.py'de (kural
+    DEĞİŞTİĞİNDE -- örn. bu DD istisnası eklendiğinde -- daha önce YANLIŞ
+    atanmış araçları düzeltmek için) KULLANILIYOR -- mantığı üç yerde ayrı
+    ayrı yazmamak için tek fonksiyonda toplandı.
     """
     if not motor_no:
         return None
-    harf = motor_no.strip()[:1].upper()
+    motor_no_temiz = motor_no.strip().upper()
+    if motor_no_temiz.startswith("DD"):
+        return "Elektrik"
+    harf = motor_no_temiz[:1]
     if harf == "G":
         return "Benzin"
     if harf == "D":
@@ -435,6 +449,13 @@ def run_range(start_date: dt.date, end_date: dt.date, chunk_days: int = 28):
     bitse bile aslında bir parça sessizce eksik kalmış olabilir. Bunu
     yakalamak için README'deki "aya göre kayıt sayısı" sorgusunu kullan --
     beklenmedik bir 0 varsa o parça başarısız olmuş demektir.
+
+    DÖNÜŞ (src/viewer.py'deki "Veri Çek" butonu ekleneli -- 2026-09-08 --
+    kullanılıyor): (total_eklendi, total_atlandi, basarisiz_parca_sayisi)
+    üçlüsü. Eskiden bu fonksiyon hiçbir şey döndürmüyordu (sadece log
+    basıyordu) -- komut satırından çalıştırıldığında (__main__ bloğu) bu
+    dönüş değeri KULLANILMIYOR, sadece log'lar okunuyordu; o yüzden bu
+    değişiklik eski kullanımı BOZMUYOR.
     """
     client = get_client()
 
@@ -442,6 +463,7 @@ def run_range(start_date: dt.date, end_date: dt.date, chunk_days: int = 28):
         cur_date = start_date
         total_eklendi = 0
         total_atlandi = 0
+        basarisiz_parca_sayisi = 0
         while cur_date <= end_date:
             chunk_end = min(cur_date + dt.timedelta(days=chunk_days - 1), end_date)
             log.info("Çekiliyor: %s -> %s", cur_date, chunk_end)
@@ -450,6 +472,7 @@ def run_range(start_date: dt.date, end_date: dt.date, chunk_days: int = 28):
                 records = client.get_purchase_invoices_by_dates(cur_date, chunk_end)
             except Exception:
                 log.exception("API çağrısı başarısız: %s -> %s", cur_date, chunk_end)
+                basarisiz_parca_sayisi += 1
                 cur_date = chunk_end + dt.timedelta(days=1)
                 continue
 
@@ -474,7 +497,11 @@ def run_range(start_date: dt.date, end_date: dt.date, chunk_days: int = 28):
 
             cur_date = chunk_end + dt.timedelta(days=1)
 
-        log.info("Bitti. Eklenen fatura: %d, atlanan (zaten vardı/eksik): %d", total_eklendi, total_atlandi)
+        log.info(
+            "Bitti. Eklenen fatura: %d, atlanan (zaten vardı/eksik): %d, başarısız parça: %d",
+            total_eklendi, total_atlandi, basarisiz_parca_sayisi,
+        )
+        return total_eklendi, total_atlandi, basarisiz_parca_sayisi
 
 
 if __name__ == "__main__":

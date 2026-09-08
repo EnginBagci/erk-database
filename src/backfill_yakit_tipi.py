@@ -8,12 +8,17 @@ dolduruluyor (bkz. etl.py'deki yakit_tipi_belirle() fonksiyonu ve adım
 11b) -- bu script SADECE bu özellik eklenmeden ÖNCE veritabanına girmiş
 olan araçlar için TEK SEFERLİK bir "geçmişi doldurma" işlemi yapar.
 
-KURAL (kullanıcı isteği, 2026-09-08) -- etl.py'deki ile BİREBİR AYNI:
-    motor no G ile başlıyorsa -> Benzin
-    motor no D ile başlıyorsa -> Dizel
-    motor no E ile başlıyorsa -> Elektrik
-    başka bir harfle başlıyorsa (ya da motor no boşsa) -> dokunulmuyor,
-    "bilinmiyor" olarak sayılıp rapor sonunda kaç tane olduğu yazdırılıyor.
+KURAL: etl.py'deki yakit_tipi_belirle() fonksiyonunu ÇAĞIRIR, kuralı
+burada TEKRAR YAZMIYORUZ (tek doğru kaynak orası -- bu dosyayı okuyup
+"DD -> Elektrik" istisnasını görmeyebilirsin, güncel kural için her zaman
+etl.py'deki fonksiyonun docstring'ine bak). Belirlenemeyen (motor no boş
+ya da tanınmayan bir harfle başlıyorsa) araçlara dokunulmuyor, "bilinmiyor"
+olarak sayılıp rapor sonunda kaç tane olduğu yazdırılıyor.
+
+NOT: Bu script SADECE yakit_id'si BOŞ olanları doldurur. Kural
+DEĞİŞTİĞİNDE (örn. yeni bir harf istisnası eklendiğinde) daha önce
+YANLIŞ atanmış araçları düzeltmek için src/yakit_tipi_yeniden_hesapla.py
+kullanılmalı -- bu script o durumda işe yaramaz (zaten dolu olana dokunmaz).
 
 Bu script AYRICA veritabanı şemasını da günceller (araclar tablosuna
 yakit_id kolonu ekler) -- ayrı bir "migration" SQL dosyası çalıştırmaya
