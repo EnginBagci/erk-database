@@ -195,12 +195,29 @@ ITHAL_ARACLAR_SORGUSU = """
     LIMIT 500
 """
 
+# Yakıt Tipi comboboxunda "Tanımsız" seçeneğini temsil eden özel bir
+# değer -- veritabanında böyle bir SATIR yok (yakit_tipleri tablosunda
+# "Tanımsız" diye bir kayıt YOK, olmasını da istemiyoruz, çünkü bu bir
+# GERÇEK yakıt tipi değil, "motor_no'dan tahmin edilemedi" durumu). Bu
+# yüzden combobox'ta gösterilen metin Python tarafında SENTETIK olarak
+# ekleniyor (bkz. aşağıdaki anasayfa() fonksiyonu), SQL'e gönderilirken de
+# "yt.adi = %s" yerine "a.yakit_id IS NULL" koşuluna çevriliyor.
+# UYARI: Bu METİN aşağıdaki FILTRE_SORGUSU'nun İÇİNDE SABİT (literal)
+# olarak da geçiyor ('TANIMSIZ_ISARETI') -- ikisini birbirinden BAĞIMSIZ
+# değiştirme, aynı kalmaları gerekiyor, yoksa "Tanımsız" filtresi sessizce
+# çalışmaz hale gelir.
+YAKIT_TANIMSIZ_DEGER = "TANIMSIZ_ISARETI"
+
 # 5) FİLTRE: Model / Dış Renk / Yakıt Tipi comboboxlarına göre (istenilen
 #    herhangi bir alt kümesi boş bırakılabilir). ÖĞRENME NOTU: "(%s = ''
 #    OR kolon = %s)" deseni, tek bir SABİT SQL metniyle OPSİYONEL filtre
 #    yapmamızı sağlıyor -- kutu boşsa (%s = '') o koşul hep DOĞRU olur,
 #    yani o alanda hiç filtre uygulanmamış gibi davranır. Bu yüzden her
-#    kutu için aynı değeri İKİ KERE parametre olarak veriyoruz.
+#    kutu için aynı değeri İKİ KERE parametre olarak veriyoruz. Yakıt Tipi
+#    için ÜÇÜNCÜ bir OR dalı daha var: "__tanimsiz__" seçilirse yt.adi'ye
+#    değil, DOĞRUDAN a.yakit_id IS NULL'a bakıyor -- bu sayede motor_no'dan
+#    yakıt tipi tahmin edilemeyen (G/D/E ile başlamayan ya da motor_no'su
+#    boş olan) araçlar da listelenip görülebiliyor.
 FILTRE_SORGUSU = """
     SELECT
         a.sasi_no, a.motor_no,
@@ -224,7 +241,7 @@ FILTRE_SORGUSU = """
     WHERE
         (%s = '' OR c.adi = %s)
         AND (%s = '' OR dr.adi = %s)
-        AND (%s = '' OR yt.adi = %s)
+        AND (%s = '' OR (%s = 'TANIMSIZ_ISARETI' AND a.yakit_id IS NULL) OR yt.adi = %s)
     ORDER BY af.fatura_tarihi DESC NULLS LAST
     LIMIT 500
 """
@@ -256,6 +273,12 @@ YAKIT_SECENEKLERI_SORGUSU = """
     FROM araclar a
     JOIN yakit_tipleri yt ON yt.id = a.yakit_id
     ORDER BY yt.adi
+"""
+
+# Yakıt tipi TANIMSIZ (yakit_id NULL) kaç araç var -- combobox'taki
+# "Tanımsız" seçeneğinin yanında kaç araç olduğunu göstermek için.
+YAKIT_TANIMSIZ_SAYISI_SORGUSU = """
+    SELECT COUNT(*) AS sayi FROM araclar WHERE yakit_id IS NULL
 """
 # UYARI: LIMIT 500 kasıtlı -- geniş bir arama/tarih aralığı binlerce satır
 # döndürebileceğinden sayfa yavaşlamasın diye. Sıralama/filtreleme sadece
@@ -727,6 +750,9 @@ ANA_SAYFA = """
             {% for y in yakit_secenekleri %}
             <option value="{{ y }}" {{ "selected" if yakit_secili == y else "" }}>{{ y }}</option>
             {% endfor %}
+            {% if yakit_tanimsiz_sayisi %}
+            <option value="{{ yakit_tanimsiz_deger }}" {{ "selected" if yakit_secili == yakit_tanimsiz_deger else "" }}>Tanımsız ({{ yakit_tanimsiz_sayisi }} araç)</option>
+            {% endif %}
           </select>
         </div>
         <button type="submit" name="eylem" value="filtrele">Filtrele</button>
@@ -1013,6 +1039,9 @@ def anasayfa():
     model_secenekleri = [r["deger"] for r in _sorgu_calistir(MODEL_SECENEKLERI_SORGUSU, [])]
     renk_secenekleri = [r["deger"] for r in _sorgu_calistir(RENK_SECENEKLERI_SORGUSU, [])]
     yakit_secenekleri = [r["deger"] for r in _sorgu_calistir(YAKIT_SECENEKLERI_SORGUSU, [])]
+    # "Tanımsız" (yakit_id NULL -- motor_no'dan tahmin edilemeyen) araç
+    # sayısı -- 0 ise combobox'ta bu seçenek hiç gösterilmiyor (bkz. ANA_SAYFA).
+    yakit_tanimsiz_sayisi = _sorgu_calistir(YAKIT_TANIMSIZ_SAYISI_SORGUSU, [])[0]["sayi"]
 
     hicbir_parametre_yok = (
         not arama_metni and not baslangic_deger and not bitis_deger
@@ -1044,17 +1073,22 @@ def anasayfa():
         baslik_metni = "Gümrük kaydı olan araçlar"
     elif eylem == "filtrele":
         arama_yapildi = True
+        # NOT: yakit_secili ÜÇ KERE veriliyor -- FILTRE_SORGUSU'ndaki yakıt
+        # koşulunda üç %s var (boş mu / "Tanımsız" mı / gerçek isme eşit mi,
+        # bkz. FILTRE_SORGUSU'nun üstündeki yorum).
         sonuclar = _sorgu_calistir(FILTRE_SORGUSU, [
             model_secili, model_secili,
             renk_secili, renk_secili,
-            yakit_secili, yakit_secili,
+            yakit_secili, yakit_secili, yakit_secili,
         ])
         parcalar = []
         if model_secili:
             parcalar.append("Model: %s" % model_secili)
         if renk_secili:
             parcalar.append("Dış Renk: %s" % renk_secili)
-        if yakit_secili:
+        if yakit_secili == YAKIT_TANIMSIZ_DEGER:
+            parcalar.append("Yakıt: Tanımsız")
+        elif yakit_secili:
             parcalar.append("Yakıt: %s" % yakit_secili)
         baslik_metni = "Filtre sonucu (%s)" % ", ".join(parcalar) if parcalar else "Tüm araçlar"
     elif arama_metni:
@@ -1094,6 +1128,8 @@ def anasayfa():
         model_secili=model_secili,
         renk_secili=renk_secili,
         yakit_secili=yakit_secili,
+        yakit_tanimsiz_deger=YAKIT_TANIMSIZ_DEGER,
+        yakit_tanimsiz_sayisi=yakit_tanimsiz_sayisi,
     )
 
 
