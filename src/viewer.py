@@ -17,22 +17,26 @@ küçük bir kütüphane. @app.route("/") gibi bir "dekoratör" (fonksiyonun
 tarayıcıda o adrese gidildiğinde o fonksiyon çalışır ve döndürdüğü HTML
 tarayıcıda gösterilir.
 
-SAYFA YAPISI (4. tasarım):
-  1) Ana sayfa ("/"): üstte özet kartları (toplam araç, toplam fatura,
-     ithal araç, bu ay eklenen). Altında şase VEYA tarih aralığı ile
-     arama yapılır -- tarih aralığı varsayılan olarak İÇİNDE BULUNULAN
-     AYIN başlangıcı/bitişi ile gelir ve sayfa ilk açıldığında otomatik
-     bu ayı gösterir; yanında Dün/Bu Ay/Geçen Ay/Bu Yıl hızlı butonları
-     var. Sonuç HER ZAMAN tek bir listeleme tablosunda gösterilir (şase,
-     motor no, model, plaka, fatura no/tarihi, toplam gibi ÖZET
-     bilgiler). Bu tablo, sonuç bulunamadığında bile başlıklarıyla
-     birlikte sabit durur -- boş diye kaybolmaz.
+SAYFA YAPISI (5. tasarım):
+  1) Ana sayfa ("/"): üstte 8 tane TIKLANABİLİR özet kartı (Toplam Araç,
+     Gümrük Kaydı Olan Araç, Bu Yıl/Geçen Ay/Bu Ay/Bu Hafta/Dün/Bugün
+     eklenen fatura sayısı). Bir karta tıklayınca alttaki tablo o karta
+     göre otomatik filtrelenir (sayfa "/" adresine ilgili ?baslangic=...
+     &bitis=... ya da ?gorunum=... parametreleriyle gider).
+     Altında GENEL bir arama kutusu var -- şase, motor no, model, renk,
+     plaka, fatura no HANGİSİYLE eşleşirse eşleşsin sonuç getirir (tek
+     tek ayrı arama kutuları yerine TEK bir "ara" kutusu). Ayrıca ayrı
+     bir tarih aralığı arama formu var, yanında Dün/Bu Ay/Geçen Ay/Bu Yıl
+     hızlı butonları (Ara butonunun YANINDA, altında değil).
+     Sonuç HER ZAMAN tek bir listeleme tablosunda gösterilir (şase, motor
+     no, model, plaka, fatura no/tarihi, toplam gibi ÖZET bilgiler). Bu
+     tablo, sonuç bulunamadığında bile başlıklarıyla birlikte sabit durur
+     -- boş diye kaybolmaz.
   2) Bir satıra tıklanınca ayrı bir DETAY sayfası ("/arac/<sasi_no>")
      KÜÇÜK, AYRI BİR PENCEREDE (popup) açılır -- ana sayfa (liste/arama)
-     OLDUĞU GİBİ, hiç etkilenmeden kalır (ne yeni sekme ne de üzerine
-     yazma -- kullanıcı özellikle "ana sayfa sabit kalsın, ufak bir
-     pencerede göster" istedi). O aracın TÜM bilgileri (özellikler, tüm
-     alış faturaları, gümrük bilgisi) o küçük pencerede gösterilir.
+     OLDUĞU GİBİ, hiç etkilenmeden kalır. O aracın TÜM bilgileri
+     (özellikler, tüm alış faturaları, gümrük bilgisi) o küçük pencerede
+     gösterilir.
 
 ETKİ HARİTASI: Bu dosya db.py ve config.py'yi kullanır (okuma amaçlı).
 etl.py/api_client.py'ye hiç dokunmaz, onları da etkilemez -- tamamen
@@ -56,16 +60,17 @@ app = Flask(__name__)
 # {"kolon_adi": deger} şeklinde sözlük döner. HTML şablonunda kolon ismiyle
 # erişmek (row["sasi_no"] gibi) daha okunaklı olduğu için bunu tercih ettik.
 
-# ---- Ana sayfadaki ÖZET liste tablosu için iki sorgu -------------------
-# İkisi de AYNI kolonları (aynı sırayla) döndürüyor ki tek bir HTML tablo
-# şablonu her ikisi için de kullanılabilsin.
-#
-# ÖĞRENME NOTU (LEFT JOIN farkı): Şase araması araclar tablosundan başlar
-# ve alis_faturalari'na LEFT JOIN yapar -- böylece henüz faturası
-# işlenmemiş bir araç bile (varsa) listede görünür. Tarih aralığı araması
-# ise alis_faturalari'ndan başlar (JOIN, LEFT JOIN değil) çünkü zaten
-# "bu tarih aralığında FATURASI olan araçlar" aranıyor.
-SASI_LISTESI_SORGUSU = """
+# ---- Ana sayfadaki ÖZET liste tablosu için DÖRT sorgu -------------------
+# Hepsi AYNI kolonları (aynı sırayla) döndürüyor ki tek bir HTML tablo
+# şablonu hepsi için de kullanılabilsin: sasi_no, motor_no, carline_adi,
+# model_yili, dis_renk, ic_renk, plaka, fatura_no, fatura_tarihi, toplam.
+
+# 1) GENEL ARAMA: tek bir kutuya yazılan metin; şase, motor no, model,
+#    dış/iç renk, fatura no ya da plakadan HERHANGİ BİRİYLE eşleşirse
+#    sonuca girer (ILIKE = büyük/küçük harf duyarsız, "içerir" araması).
+#    ÖĞRENME NOTU: %s yedi kere geçiyor, bu yüzden çağırırken aynı
+#    joker'i ([joker]*7) yedi kere parametre olarak veriyoruz.
+GENEL_ARAMA_SORGUSU = """
     SELECT
         a.sasi_no, a.motor_no,
         c.adi AS carline_adi, a.model_yili,
@@ -83,10 +88,24 @@ SASI_LISTESI_SORGUSU = """
     LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
     LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
     LEFT JOIN alis_faturalari af ON af.arac_id = a.id
-    WHERE a.sasi_no = %s
+    WHERE
+        a.sasi_no ILIKE %s
+        OR a.motor_no ILIKE %s
+        OR c.adi ILIKE %s
+        OR dr.adi ILIKE %s
+        OR ic.adi ILIKE %s
+        OR af.fatura_no ILIKE %s
+        OR EXISTS (
+            SELECT 1 FROM plakalar p2
+            WHERE p2.arac_id = a.id AND p2.plaka ILIKE %s
+        )
     ORDER BY af.fatura_tarihi DESC NULLS LAST
+    LIMIT 500
 """
 
+# 2) TARİH ARALIĞI: belirli bir aralıkta FATURASI olan araçlar (özet
+#    kartlarına tıklayınca da bu sorgu kullanılıyor, kartların linki
+#    /?baslangic=...&bitis=... şeklinde).
 TARIH_LISTESI_SORGUSU = """
     SELECT
         a.sasi_no, a.motor_no,
@@ -109,9 +128,57 @@ TARIH_LISTESI_SORGUSU = """
     ORDER BY af.fatura_tarihi DESC
     LIMIT 500
 """
-# UYARI: LIMIT 500 kasıtlı -- geniş bir tarih aralığı girilirse (örn.
-# 2020-2026) sayfa binlerce satırla yavaşlamasın diye. Sıralama/filtreleme
-# sadece ekrandaki (en fazla 500) satır üzerinde çalışır.
+
+# 3) TÜM ARAÇLAR: "Toplam Araç" kartına tıklayınca -- hiçbir filtre yok,
+#    faturası olmayan araçlar bile (varsa) LEFT JOIN sayesinde görünür.
+TUM_ARACLAR_SORGUSU = """
+    SELECT
+        a.sasi_no, a.motor_no,
+        c.adi AS carline_adi, a.model_yili,
+        dr.adi AS dis_renk, ic.adi AS ic_renk,
+        (
+            SELECT p.plaka FROM plakalar p
+            WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
+        ) AS plaka,
+        af.fatura_no, af.fatura_tarihi, af.toplam
+    FROM araclar a
+    LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
+    LEFT JOIN spec_ocn so ON so.id = sor.spec_ocn_id
+    LEFT JOIN spec s ON s.id = so.spec_id
+    LEFT JOIN carline c ON c.id = s.carline_id
+    LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
+    LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
+    LEFT JOIN alis_faturalari af ON af.arac_id = a.id
+    ORDER BY af.fatura_tarihi DESC NULLS LAST
+    LIMIT 500
+"""
+
+# 4) GÜMRÜK KAYDI OLAN ARAÇLAR: "Gümrük Kaydı Olan Araç" kartına tıklayınca.
+ITHAL_ARACLAR_SORGUSU = """
+    SELECT
+        a.sasi_no, a.motor_no,
+        c.adi AS carline_adi, a.model_yili,
+        dr.adi AS dis_renk, ic.adi AS ic_renk,
+        (
+            SELECT p.plaka FROM plakalar p
+            WHERE p.arac_id = a.id ORDER BY p.id DESC LIMIT 1
+        ) AS plaka,
+        af.fatura_no, af.fatura_tarihi, af.toplam
+    FROM araclar a
+    LEFT JOIN spec_ocn_renk sor ON sor.id = a.spec_ocn_renk_id
+    LEFT JOIN spec_ocn so ON so.id = sor.spec_ocn_id
+    LEFT JOIN spec s ON s.id = so.spec_id
+    LEFT JOIN carline c ON c.id = s.carline_id
+    LEFT JOIN dis_renkler dr ON dr.id = sor.dis_renk_id
+    LEFT JOIN ic_renkler ic ON ic.id = sor.ic_renk_id
+    LEFT JOIN alis_faturalari af ON af.arac_id = a.id
+    WHERE EXISTS (SELECT 1 FROM gumruk_bilgileri g WHERE g.arac_id = a.id)
+    ORDER BY af.fatura_tarihi DESC NULLS LAST
+    LIMIT 500
+"""
+# UYARI: LIMIT 500 kasıtlı -- geniş bir arama/tarih aralığı binlerce satır
+# döndürebileceğinden sayfa yavaşlamasın diye. Sıralama/filtreleme sadece
+# ekrandaki (en fazla 500) satır üzerinde çalışır.
 
 # ---- Detay sayfası ("/arac/<sasi_no>") için üç sorgu --------------------
 SASI_SORGUSU = """
@@ -154,16 +221,21 @@ SASI_GUMRUK_SORGUSU = """
     WHERE a.sasi_no = %s
 """
 
-# ---- Ana sayfa üstündeki özet kartları için tek sorgu -------------------
-# GERİ EKLENDİ: bu kartlar 2. tasarımda kaldırılmıştı, kullanıcı
-# "kaldırmanı istemedim" deyince tekrar eklendi.
+# ---- Ana sayfa üstündeki 8 özet kartı için tek sorgu --------------------
+# ÖĞRENME NOTU: 6 tanesi (bu_yil...bugun) BETWEEN %s AND %s kullanıyor,
+# bu yüzden çağırırken 12 tarih parametresi (6 çift) veriyoruz -- sırası
+# ÇOK ÖNEMLİ, aşağıdaki anasayfa() fonksiyonundaki sırayla birebir aynı
+# olmalı (yıl, geçen ay, bu ay, bu hafta, dün, bugün).
 ISTATISTIK_SORGUSU = """
     SELECT
         (SELECT COUNT(*) FROM araclar) AS toplam_arac,
-        (SELECT COUNT(*) FROM alis_faturalari) AS toplam_fatura,
         (SELECT COUNT(DISTINCT arac_id) FROM gumruk_bilgileri) AS ithal_arac,
-        (SELECT COUNT(*) FROM alis_faturalari
-         WHERE fatura_tarihi >= date_trunc('month', CURRENT_DATE)) AS bu_ay_fatura
+        (SELECT COUNT(*) FROM alis_faturalari WHERE fatura_tarihi BETWEEN %s AND %s) AS bu_yil_fatura,
+        (SELECT COUNT(*) FROM alis_faturalari WHERE fatura_tarihi BETWEEN %s AND %s) AS gecen_ay_fatura,
+        (SELECT COUNT(*) FROM alis_faturalari WHERE fatura_tarihi BETWEEN %s AND %s) AS bu_ay_fatura,
+        (SELECT COUNT(*) FROM alis_faturalari WHERE fatura_tarihi BETWEEN %s AND %s) AS bu_hafta_fatura,
+        (SELECT COUNT(*) FROM alis_faturalari WHERE fatura_tarihi BETWEEN %s AND %s) AS dun_fatura,
+        (SELECT COUNT(*) FROM alis_faturalari WHERE fatura_tarihi BETWEEN %s AND %s) AS bugun_fatura
 """
 
 
@@ -175,14 +247,6 @@ def _sorgu_calistir(sql, params):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, params)
             return [dict(row) for row in cur.fetchall()]
-
-
-def _istatistikleri_al():
-    """Üstteki 4 kartın sayılarını tek sorguda getirir."""
-    sonuc = _sorgu_calistir(ISTATISTIK_SORGUSU, [])
-    return sonuc[0] if sonuc else {
-        "toplam_arac": 0, "toplam_fatura": 0, "ithal_arac": 0, "bu_ay_fatura": 0,
-    }
 
 
 # ------------------------------------------------------------------
@@ -213,18 +277,21 @@ ORTAK_STIL = """
 
   .icerik { padding: 20px 28px 40px; }
 
-  /* Özet kartları -- geri eklendi */
-  .kart-satiri { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+  /* Özet kartları -- TIKLANABİLİR: her kart bir <a> ile sarmalanıyor. */
+  .kart-satiri { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .kart-link { flex: 1 1 140px; text-decoration: none; color: inherit; display: block; }
+  .kart-link:hover .kart { box-shadow: 0 4px 12px rgba(0,0,0,0.15); transform: translateY(-1px); }
   .kart {
-    flex: 1 1 200px;
     background: #fff;
     border-radius: 8px;
-    padding: 16px 18px;
+    padding: 14px 16px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     border-top: 4px solid #ccc;
+    transition: box-shadow 0.1s, transform 0.1s;
+    height: 100%;
   }
-  .kart .sayi { font-size: 28px; font-weight: 700; line-height: 1.2; }
-  .kart .etiket { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  .kart .sayi { font-size: 24px; font-weight: 700; line-height: 1.2; }
+  .kart .etiket { font-size: 11px; color: #6b7280; margin-top: 4px; }
   .kart.mavi { border-top-color: #2563eb; }
   .kart.mavi .sayi { color: #2563eb; }
   .kart.yesil { border-top-color: #16a34a; }
@@ -244,7 +311,13 @@ ORTAK_STIL = """
     flex: 1 1 320px;
   }
   form.arama-formu b { font-size: 13px; color: #111827; }
-  label { display: inline-block; min-width: 90px; font-size: 13px; margin-top: 10px; }
+  /* ÖNEMLİ: label'a sabit min-width VERİLMİYOR -- "Başlangıç:" ile "Bitiş:"
+     farklı uzunlukta oldukları için sabit bir min-width, kısa olan
+     etiketin ("Bitiş:") yanında kullanılmayan boş bir alan bırakıyordu
+     (kullanıcının ekran görüntüsünde siyah çerçeveyle işaretlediği boşluk).
+     Bunun yerine etiket kendi metni kadar yer kaplasın, input'a sadece
+     küçük sabit bir boşlukla (margin-right) yapışsın. */
+  label { display: inline-block; font-size: 13px; margin-top: 10px; margin-right: 6px; }
   input[type=text], input[type=date] {
     padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px;
   }
@@ -254,14 +327,23 @@ ORTAK_STIL = """
   }
   button:hover { background: #1d4ed8; }
 
-  /* Dün / Bu Ay / Geçen Ay / Bu Yıl kısayol butonları -- ana "Ara"
-     butonundan ayırt edilsin diye daha küçük ve gri/ikincil renkte. */
-  .hizli-tarih-butonlari { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  .hizli-tarih-butonlari button {
+  /* Genel "Ara" kutusu: etiket + metin kutusu + buton aynı satırda,
+     metin kutusu (input) kalan tüm genişliği doldursun diye flex ile
+     büyütülüyor -- kutu artık "çok ufak" kalmıyor. */
+  .genel-arama-satiri { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .genel-arama-satiri label { margin-top: 0; margin-right: 0; }
+  .genel-arama-satiri input[type=text] { flex: 1 1 240px; min-width: 200px; }
+  .genel-arama-satiri button { margin-top: 0; }
+
+  /* Tarih aralığı formundaki "Ara" + Dün/Bu Ay/Geçen Ay/Bu Yıl butonları
+     AYNI SATIRDA yan yana dursun diye tek bir flex satırına konuyor. */
+  .tarih-buton-satiri { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .tarih-buton-satiri button { margin-top: 0; }
+  .buton-ikincil {
     background: #eef1f5; color: #1f2937; border: 1px solid #cbd5e1;
-    padding: 5px 12px; font-size: 12px; margin-top: 0;
+    padding: 7px 12px; font-size: 12px;
   }
-  .hizli-tarih-butonlari button:hover { background: #e2e8f0; }
+  .buton-ikincil:hover { background: #e2e8f0; }
 
   .tablo-sarmalayici {
     background: #fff;
@@ -301,7 +383,7 @@ ORTAK_STIL = """
 
 ORTAK_JS = """
 <script>
-// ÖĞRENME NOTU: Bu iki fonksiyon SAYFA YENİDEN YÜKLENMEDEN çalışır --
+// ÖĞRENME NOTU: Bu fonksiyonlar SAYFA YENİDEN YÜKLENMEDEN çalışır --
 // veritabanına gitmez, sadece o an ekranda olan <table> satırlarını
 // tarayıcının kendi belleğinde yeniden sıralar / gizler.
 
@@ -448,30 +530,64 @@ ANA_SAYFA = """
 <div class="icerik">
 
   <div class="kart-satiri">
-    <div class="kart mavi">
-      <div class="sayi">{{ istatistik.toplam_arac }}</div>
-      <div class="etiket">TOPLAM ARAÇ</div>
-    </div>
-    <div class="kart yesil">
-      <div class="sayi">{{ istatistik.toplam_fatura }}</div>
-      <div class="etiket">TOPLAM ALIŞ FATURASI</div>
-    </div>
-    <div class="kart turuncu">
-      <div class="sayi">{{ istatistik.ithal_arac }}</div>
-      <div class="etiket">İTHAL (GÜMRÜK KAYDI OLAN) ARAÇ</div>
-    </div>
-    <div class="kart mor">
-      <div class="sayi">{{ istatistik.bu_ay_fatura }}</div>
-      <div class="etiket">BU AY EKLENEN FATURA</div>
-    </div>
+    <a class="kart-link" href="/?gorunum=tum">
+      <div class="kart mavi">
+        <div class="sayi">{{ istatistik.toplam_arac }}</div>
+        <div class="etiket">TOPLAM ARAÇ</div>
+      </div>
+    </a>
+    <a class="kart-link" href="/?gorunum=ithal">
+      <div class="kart yesil">
+        <div class="sayi">{{ istatistik.ithal_arac }}</div>
+        <div class="etiket">GÜMRÜK KAYDI OLAN ARAÇ</div>
+      </div>
+    </a>
+    <a class="kart-link" href="/?baslangic={{ kart_tarihleri.bu_yil[0] }}&bitis={{ kart_tarihleri.bu_yil[1] }}">
+      <div class="kart turuncu">
+        <div class="sayi">{{ istatistik.bu_yil_fatura }}</div>
+        <div class="etiket">BU YIL EKLENEN FATURA</div>
+      </div>
+    </a>
+    <a class="kart-link" href="/?baslangic={{ kart_tarihleri.gecen_ay[0] }}&bitis={{ kart_tarihleri.gecen_ay[1] }}">
+      <div class="kart mor">
+        <div class="sayi">{{ istatistik.gecen_ay_fatura }}</div>
+        <div class="etiket">GEÇEN AY EKLENEN FATURA</div>
+      </div>
+    </a>
+    <a class="kart-link" href="/?baslangic={{ kart_tarihleri.bu_ay[0] }}&bitis={{ kart_tarihleri.bu_ay[1] }}">
+      <div class="kart mavi">
+        <div class="sayi">{{ istatistik.bu_ay_fatura }}</div>
+        <div class="etiket">BU AY EKLENEN FATURA</div>
+      </div>
+    </a>
+    <a class="kart-link" href="/?baslangic={{ kart_tarihleri.bu_hafta[0] }}&bitis={{ kart_tarihleri.bu_hafta[1] }}">
+      <div class="kart yesil">
+        <div class="sayi">{{ istatistik.bu_hafta_fatura }}</div>
+        <div class="etiket">BU HAFTA EKLENEN FATURA</div>
+      </div>
+    </a>
+    <a class="kart-link" href="/?baslangic={{ kart_tarihleri.dun[0] }}&bitis={{ kart_tarihleri.dun[1] }}">
+      <div class="kart turuncu">
+        <div class="sayi">{{ istatistik.dun_fatura }}</div>
+        <div class="etiket">DÜN EKLENEN FATURA</div>
+      </div>
+    </a>
+    <a class="kart-link" href="/?baslangic={{ kart_tarihleri.bugun[0] }}&bitis={{ kart_tarihleri.bugun[1] }}">
+      <div class="kart mor">
+        <div class="sayi">{{ istatistik.bugun_fatura }}</div>
+        <div class="etiket">BUGÜN EKLENEN FATURA</div>
+      </div>
+    </a>
   </div>
 
   <div class="arama-kartlari">
     <form class="arama-formu" method="get">
-      <b>Şasi ile ara</b><br>
-      <label>Şasi no:</label>
-      <input type="text" name="sasi" value="{{ sasi_deger }}" placeholder="örn. KMHM341B1TA123333">
-      <button type="submit">Ara</button>
+      <b>Ara</b> <span class="bilgi-notu">(şase, motor no, model, renk, plaka ya da fatura no)</span><br>
+      <div class="genel-arama-satiri">
+        <label>Ne arıyorsun:</label>
+        <input type="text" name="q" value="{{ arama_metni }}" placeholder="örn. KMHM341..., 34 ABC 123, kırmızı, Tucson...">
+        <button type="submit">Ara</button>
+      </div>
     </form>
 
     <form class="arama-formu" method="get" id="tarih-arama-formu">
@@ -481,23 +597,17 @@ ANA_SAYFA = """
       &nbsp;
       <label>Bitiş:</label>
       <input type="date" name="bitis" id="bitis-girdi" value="{{ bitis_deger }}">
-      <button type="submit">Ara</button>
-      <div class="hizli-tarih-butonlari">
-        <button type="button" onclick="tarihAyarla('dun')">Dün</button>
-        <button type="button" onclick="tarihAyarla('bu-ay')">Bu Ay</button>
-        <button type="button" onclick="tarihAyarla('gecen-ay')">Geçen Ay</button>
-        <button type="button" onclick="tarihAyarla('bu-yil')">Bu Yıl</button>
+      <div class="tarih-buton-satiri">
+        <button type="submit">Ara</button>
+        <button type="button" class="buton-ikincil" onclick="tarihAyarla('dun')">Dün</button>
+        <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-ay')">Bu Ay</button>
+        <button type="button" class="buton-ikincil" onclick="tarihAyarla('gecen-ay')">Geçen Ay</button>
+        <button type="button" class="buton-ikincil" onclick="tarihAyarla('bu-yil')">Bu Yıl</button>
       </div>
     </form>
   </div>
 
-  <h2>
-    {% if arama_yapildi %}
-      Arama sonucu ({{ sonuclar|length }} kayıt{{ ", en fazla 500 gösteriliyor" if sonuclar|length >= 500 else "" }})
-    {% else %}
-      Araç listesi
-    {% endif %}
-  </h2>
+  <h2>{{ baslik_metni }} ({{ sonuclar|length }} kayıt{{ ", en fazla 500 gösteriliyor" if sonuclar|length >= 500 else "" }})</h2>
   <p class="bilgi-notu">Bir satıra tıklayınca o aracın tüm detayları (özellikler, faturalar, gümrük bilgisi) küçük, ayrı bir PENCEREDE açılır -- bu sayfa olduğu gibi kalır.</p>
 
   <div class="tablo-sarmalayici">
@@ -541,7 +651,7 @@ ANA_SAYFA = """
           {% if arama_yapildi %}
             Bu aramayla eşleşen kayıt bulunamadı.
           {% else %}
-            Henüz arama yapmadınız -- yukarıdan şase numarası girin ya da bir tarih aralığı seçin.
+            Henüz arama yapmadınız -- yukarıdan bir şey arayın, tarih seçin ya da bir karta tıklayın.
           {% endif %}
         </td>
       </tr>
@@ -682,32 +792,70 @@ DETAY_SAYFA = """
 
 @app.route("/")
 def anasayfa():
-    """Ana sayfa: şase VEYA tarih aralığı arama formları + HER ZAMAN
-    görünen tek bir özet liste tablosu. Hangi form gönderildiyse (URL'deki
-    ?sasi=... ya da ?baslangic=...&bitis=... parametrelerine bakarak)
-    ilgili sorguyu çalıştırıp sonucu bu tabloya koyuyoruz.
+    """Ana sayfa: 8 tıklanabilir özet kartı + genel arama kutusu + tarih
+    aralığı arama formu -- hepsi AYNI özet liste tablosunu doldurur.
+
+    ÖNCELİK SIRASI (hangi arama önce kontrol edilir):
+      1) ?gorunum=tum       -> tüm araçlar (Toplam Araç kartı)
+      2) ?gorunum=ithal     -> gümrük kaydı olan araçlar (o kart)
+      3) ?q=...             -> genel arama (şase/motor/model/renk/plaka/fatura)
+      4) ?baslangic=&bitis= -> tarih aralığı (diğer 6 kart da buraya düşer)
+      5) hiçbiri yoksa      -> varsayılan: bu ayı otomatik göster
 
     ÖĞRENME NOTU (varsayılan tarih): Tarih kutuları hiçbir zaman boş
     görünmesin diye (ve sayfa ilk açıldığında hemen işe yarasın diye)
     parametre hiç verilmemişse varsayılan olarak İÇİNDE BULUNULAN AYIN
-    ilk günü / son günü kullanılıyor -- hem kutucuklarda GÖRÜNÜR hem de
-    (hiç arama yapılmamışsa) bu ayla otomatik arama yapılır."""
-    istatistik = _istatistikleri_al()
-
+    ilk günü / son günü kullanılıyor."""
     bugun = dt.date.today()
+    dun = bugun - dt.timedelta(days=1)
+    hafta_baslangic = bugun - dt.timedelta(days=bugun.weekday())  # Pazartesi
+    hafta_bitis = hafta_baslangic + dt.timedelta(days=6)  # Pazar
+
     ay_baslangic = bugun.replace(day=1)
     ay_bitis = bugun.replace(day=calendar.monthrange(bugun.year, bugun.month)[1])
 
-    sasi_deger = request.args.get("sasi", "").strip()
+    if ay_baslangic.month == 1:
+        gecen_ay_baslangic = dt.date(ay_baslangic.year - 1, 12, 1)
+    else:
+        gecen_ay_baslangic = dt.date(ay_baslangic.year, ay_baslangic.month - 1, 1)
+    gecen_ay_bitis = gecen_ay_baslangic.replace(
+        day=calendar.monthrange(gecen_ay_baslangic.year, gecen_ay_baslangic.month)[1]
+    )
+
+    yil_baslangic = dt.date(bugun.year, 1, 1)
+    yil_bitis = dt.date(bugun.year, 12, 31)
+
+    # Kartlara tıklayınca gidilecek linkler için tarihleri metne çeviriyoruz.
+    kart_tarihleri = {
+        "bu_yil": (yil_baslangic.isoformat(), yil_bitis.isoformat()),
+        "gecen_ay": (gecen_ay_baslangic.isoformat(), gecen_ay_bitis.isoformat()),
+        "bu_ay": (ay_baslangic.isoformat(), ay_bitis.isoformat()),
+        "bu_hafta": (hafta_baslangic.isoformat(), hafta_bitis.isoformat()),
+        "dun": (dun.isoformat(), dun.isoformat()),
+        "bugun": (bugun.isoformat(), bugun.isoformat()),
+    }
+
+    istatistik = _sorgu_calistir(ISTATISTIK_SORGUSU, [
+        yil_baslangic, yil_bitis,
+        gecen_ay_baslangic, gecen_ay_bitis,
+        ay_baslangic, ay_bitis,
+        hafta_baslangic, hafta_bitis,
+        dun, dun,
+        bugun, bugun,
+    ])[0]
+
+    arama_metni = request.args.get("q", "").strip()
     baslangic_deger = request.args.get("baslangic", "").strip()
     bitis_deger = request.args.get("bitis", "").strip()
+    gorunum = request.args.get("gorunum", "").strip()
 
-    hicbir_parametre_yok = not sasi_deger and not baslangic_deger and not bitis_deger
+    hicbir_parametre_yok = (
+        not arama_metni and not baslangic_deger and not bitis_deger and not gorunum
+    )
 
     # Tarih kutucukları HER ZAMAN dolu görünsün -- kullanıcı henüz kendi
-    # tarihini girmediyse (baslangic_deger/bitis_deger boşsa) kutularda bu
-    # ayın tarihlerini GÖSTERİYORUZ (aşağıdaki değişkenler sadece HTML'e
-    # gidiyor, arama mantığını etkilemiyor).
+    # tarihini girmediyse kutularda bu ayın tarihlerini GÖSTERİYORUZ
+    # (bu değişkenler sadece HTML'e gidiyor, arama mantığını etkilemiyor).
     if not baslangic_deger and not bitis_deger:
         baslangic_gosterim = ay_baslangic.isoformat()
         bitis_gosterim = ay_bitis.isoformat()
@@ -717,16 +865,28 @@ def anasayfa():
 
     sonuclar = []
     arama_yapildi = False
+    baslik_metni = "Araç listesi"
 
-    if sasi_deger:
+    if gorunum == "tum":
         arama_yapildi = True
-        sonuclar = _sorgu_calistir(SASI_LISTESI_SORGUSU, [sasi_deger])
+        sonuclar = _sorgu_calistir(TUM_ARACLAR_SORGUSU, [])
+        baslik_metni = "Tüm araçlar"
+    elif gorunum == "ithal":
+        arama_yapildi = True
+        sonuclar = _sorgu_calistir(ITHAL_ARACLAR_SORGUSU, [])
+        baslik_metni = "Gümrük kaydı olan araçlar"
+    elif arama_metni:
+        arama_yapildi = True
+        joker = "%" + arama_metni + "%"
+        sonuclar = _sorgu_calistir(GENEL_ARAMA_SORGUSU, [joker] * 7)
+        baslik_metni = '"%s" için arama sonucu' % arama_metni
     elif baslangic_deger and bitis_deger:
         try:
             b = dt.datetime.strptime(baslangic_deger, "%Y-%m-%d").date()
             e = dt.datetime.strptime(bitis_deger, "%Y-%m-%d").date()
             arama_yapildi = True
             sonuclar = _sorgu_calistir(TARIH_LISTESI_SORGUSU, [b, e])
+            baslik_metni = "%s - %s arası" % (baslangic_deger, bitis_deger)
         except ValueError:
             pass  # geçersiz tarih girildiyse sessizce boş sonuç göster
     elif hicbir_parametre_yok:
@@ -734,15 +894,18 @@ def anasayfa():
         # göster (boş "araç listesi" yerine hemen işe yarar bir görünüm).
         arama_yapildi = True
         sonuclar = _sorgu_calistir(TARIH_LISTESI_SORGUSU, [ay_baslangic, ay_bitis])
+        baslik_metni = "Bu ay"
 
     return render_template_string(
         ANA_SAYFA,
         istatistik=istatistik,
-        sasi_deger=sasi_deger,
+        kart_tarihleri=kart_tarihleri,
+        arama_metni=arama_metni,
         baslangic_deger=baslangic_gosterim,
         bitis_deger=bitis_gosterim,
         sonuclar=sonuclar,
         arama_yapildi=arama_yapildi,
+        baslik_metni=baslik_metni,
     )
 
 

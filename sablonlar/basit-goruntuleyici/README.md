@@ -19,23 +19,42 @@ kendisi) aynı kalır.
 
 ## Tasarım deseni
 
-1. **Liste sayfası** ("/"): (istenirse) üstte renkli özet/istatistik
-   kartları + bir veya iki arama formu (örn. metin ara, tarih aralığı
-   ara) + sonucun HER ZAMAN göründüğü tek bir tablo. Tablo, hiç arama
-   yapılmamışken veya sonuç bulunamadığında bile BAŞLIKLARIYLA birlikte
-   sabit durur -- veri yoksa gövdede sadece "kayıt yok" satırı görünür,
-   başlıklar kaybolmaz.
-2. **Detay sayfası** ("/<id>"): Listedeki bir satıra tıklanınca, o kaydın
+1. **Liste sayfası** ("/"): (istenirse) üstte renkli, TIKLANABİLİR özet/
+   istatistik kartları + GENEL bir arama kutusu (tek kutuya yazılan metin
+   BİRDEN FAZLA alanla -- örn. isim/kod/renk/etiket -- eşleşir, ayrı ayrı
+   "şu alana göre ara" kutuları yerine) + gerekiyorsa ayrı bir tarih
+   aralığı arama formu + sonucun HER ZAMAN göründüğü tek bir tablo. Tablo,
+   hiç arama yapılmamışken veya sonuç bulunamadığında bile BAŞLIKLARIYLA
+   birlikte sabit durur -- veri yoksa gövdede sadece "kayıt yok" satırı
+   görünür, başlıklar kaybolmaz.
+2. **Kartlar tıklanınca filtreler**: her özet kart bir `<a class="kart-
+   link" href="/?...">` ile sarmalanır -- tıklanınca o kartın temsil
+   ettiği filtreyle (örn. "bu ayın tarih aralığı" ya da özel bir görünüm
+   parametresi) ana sayfaya gidip listeyi otomatik doldurur. Kart
+   görünümü ile linkin ayrılması (`.kart-link` dışta, `.kart` içte)
+   önemli -- CSS'te böyle kurulu (bkz. `ortak.py`).
+3. **Detay sayfası** ("/<id>"): Listedeki bir satıra tıklanınca, o kaydın
    TÜM bilgilerini gösteren ayrı bir sayfa **KÜÇÜK, AYRI BİR PENCEREDE**
    (popup -- `window.open` + genişlik/yükseklik verilerek, "_blank" DEĞİL)
    açılır. Ana sayfa (liste + arama sonucu) olduğu sekmede hiç
    değişmeden, hiç kaybolmadan kalır.
-3. Tablolarda: sütun başlığına tıklayınca sıralama, başlığın altındaki
+4. Tablolarda: sütun başlığına tıklayınca sıralama, başlığın altındaki
    kutucuklara yazınca anlık (sayfa yenilenmeden) filtreleme.
-4. Görsel dil: koyu lacivert üst şerit, beyaz kartlar, sade kurumsal
-   görünüm. Renkli özet/istatistik kartları (örn. "Toplam Araç", "Toplam
-   Fatura") İSTENİYORSA `ortak.py`'deki `.kart-satiri`/`.kart` CSS'i
-   kullanılır (erk-database'in görüntüleyicisinde kullanılıyor).
+5. Bir arama formunda "Ara" butonunun yanına kısayol butonları (örn.
+   Dün/Bu Ay/Geçen Ay/Bu Yıl) koyacaksan bunlar Ara butonunun ALTINA
+   DEĞİL, AYNI SATIRA (yanına) konur -- `ortak.py`'deki `.buton-satiri`/
+   `.buton-ikincil` CSS sınıfları bunun için.
+5b. Genel arama kutusundaki etiket+girdi+buton'u DAİMA `.genel-arama-
+   satiri` sınıflı bir `<div>` içine sar (bkz. `ornek_uygulama.py`).
+   Bu sayede metin kutusu (input) kalan boşluğu doldurur ve "çok ufak"
+   kalmaz. Ayrıca `label`'a ASLA sabit bir `min-width` verme -- "Başlangıç:"
+   gibi uzun ve "Bitiş:" gibi kısa etiketler yan yana kullanılınca, sabit
+   min-width kısa etiketin yanında kullanılmayan bir boşluk bırakır
+   (erk-database'de fark edilip düzeltilen bir hataydı).
+6. Görsel dil: koyu lacivert üst şerit, beyaz kartlar, sade kurumsal
+   görünüm. Renkli özet/istatistik kartları İSTENİYORSA `ortak.py`'deki
+   `.kart-satiri`/`.kart-link`/`.kart` CSS'i kullanılır (erk-database'in
+   görüntüleyicisinde 8 kart olarak kullanılıyor).
 
 ## Dosyalar
 
@@ -60,14 +79,20 @@ kendisi) aynı kalır.
    alanları kendi verine göre güncelle.
 4. Arama formu/formlarını ihtiyacına göre değiştir (tek kutu, iki kutu,
    tarih aralığı vs.).
-5. İstenirse üste özet kartları ekle (bkz. `erk-database/src/viewer.py`
-   içindeki `ISTATISTIK_SORGUSU` + `.kart-satiri` HTML bloğu -- birebir
-   kopyalanabilir örnek).
-6. Tarih aralığı araması varsa: varsayılan olarak içinde bulunulan ayı
-   göstermek + yanına "Dün/Bu Ay/Geçen Ay/Bu Yıl" gibi hızlı butonlar
-   koymak isteyebilirsin (bkz. `erk-database/src/viewer.py` içindeki
-   `tarihAyarla()` JS fonksiyonu ve Python tarafındaki `ay_baslangic`/
-   `ay_bitis` varsayılan hesaplaması -- birebir kopyalanabilir örnek).
+5. İstenirse üste TIKLANABİLİR özet kartları ekle (bkz. `erk-database/
+   src/viewer.py` içindeki `ISTATISTIK_SORGUSU` + `kart_tarihleri` +
+   `.kart-satiri`/`.kart-link` HTML bloğu -- birebir kopyalanabilir
+   örnek, her kart `<a href="/?...">` ile sarılı).
+6. Ayrı ayrı "şu alana göre ara" kutuları yerine TEK bir genel arama
+   kutusu düşünebilirsin -- SQL'de `OR`/`ILIKE` ile birden fazla kolonu
+   birden kontrol eder (bkz. `erk-database/src/viewer.py` içindeki
+   `GENEL_ARAMA_SORGUSU`).
+7. Tarih aralığı araması varsa: varsayılan olarak içinde bulunulan ayı
+   göstermek + "Ara" butonunun YANINA (altına değil) "Dün/Bu Ay/Geçen
+   Ay/Bu Yıl" gibi hızlı butonlar koymak isteyebilirsin (bkz.
+   `erk-database/src/viewer.py` içindeki `tarihAyarla()` JS fonksiyonu,
+   `.buton-satiri` CSS'i ve Python tarafındaki `ay_baslangic`/`ay_bitis`
+   varsayılan hesaplaması -- birebir kopyalanabilir örnek).
 
 Bu şablon bilerek "ham" ve küçük tutuldu -- her yeni araç için birebir
 kopyala-yapıştır + birkaç satır değiştirme yeterli olsun diye.

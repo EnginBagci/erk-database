@@ -88,9 +88,11 @@ LISTE_SAYFASI = """
   <div class="arama-kartlari">
     <form class="arama-formu" method="get">
       <b>İsimle ara</b><br>
-      <label>Ad:</label>
-      <input type="text" name="ara" value="{{ arama_metni }}" placeholder="örn. Ahmet">
-      <button type="submit">Ara</button>
+      <div class="genel-arama-satiri">
+        <label>Ad:</label>
+        <input type="text" name="ara" value="{{ arama_metni }}" placeholder="örn. Ahmet">
+        <button type="submit">Ara</button>
+      </div>
     </form>
   </div>
 

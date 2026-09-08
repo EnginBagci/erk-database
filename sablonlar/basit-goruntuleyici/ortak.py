@@ -39,20 +39,30 @@ ORTAK_STIL = """
   .icerik { padding: 20px 28px 40px; }
 
   /* Üstte özet/istatistik kartları göstermek istersen (opsiyonel --
-     erk-database'de "Toplam Araç", "Toplam Fatura" gibi sayılar için
-     kullanılıyor). Kullanmayan projeler bu bloğu HTML'e hiç eklemeyebilir,
-     CSS'te durması zararsız. */
-  .kart-satiri { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+     erk-database'de "Toplam Araç", "Bu Ay Eklenen Fatura" gibi sayılar
+     için kullanılıyor). Kullanmayan projeler bu bloğu HTML'e hiç
+     eklemeyebilir, CSS'te durması zararsız.
+     TIKLANABİLİR KART DESENİ: her kart bir <a class="kart-link"
+     href="/?..."> ile SARMALANIR -- kart görünümü (.kart) linkin İÇİNDE.
+     Böylece bir karta tıklamak, o kartın temsil ettiği filtreyle (örn.
+     bu ayın tarih aralığı, ya da özel bir "gorunum" parametresi) ana
+     sayfaya gidip alttaki tabloyu otomatik doldurur -- erk-database'de
+     böyle kullanılıyor (bkz. viewer.py ANA_SAYFA şablonundaki kart-link
+     href'leri: "/?gorunum=tum", "/?baslangic=...&bitis=..." gibi). */
+  .kart-satiri { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .kart-link { flex: 1 1 140px; text-decoration: none; color: inherit; display: block; }
+  .kart-link:hover .kart { box-shadow: 0 4px 12px rgba(0,0,0,0.15); transform: translateY(-1px); }
   .kart {
-    flex: 1 1 200px;
     background: #fff;
     border-radius: 8px;
-    padding: 16px 18px;
+    padding: 14px 16px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     border-top: 4px solid #ccc;
+    transition: box-shadow 0.1s, transform 0.1s;
+    height: 100%;
   }
-  .kart .sayi { font-size: 28px; font-weight: 700; line-height: 1.2; }
-  .kart .etiket { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  .kart .sayi { font-size: 24px; font-weight: 700; line-height: 1.2; }
+  .kart .etiket { font-size: 11px; color: #6b7280; margin-top: 4px; }
   .kart.mavi { border-top-color: #2563eb; }
   .kart.mavi .sayi { color: #2563eb; }
   .kart.yesil { border-top-color: #16a34a; }
@@ -72,7 +82,12 @@ ORTAK_STIL = """
     flex: 1 1 320px;
   }
   form.arama-formu b { font-size: 13px; color: #111827; }
-  label { display: inline-block; min-width: 90px; font-size: 13px; margin-top: 10px; }
+  /* ÖNEMLİ: label'a sabit min-width VERME -- "Başlangıç:" gibi uzun ve
+     "Bitiş:" gibi kısa etiketler aynı forma girdiğinde, sabit bir
+     min-width kısa etiketin yanında kullanılmayan boş bir alan bırakır
+     (erk-database'de bu boşluk fark edilip düzeltildi). Etiket kendi
+     metni kadar yer kaplasın, girdiye küçük sabit bir boşlukla yapışsın. */
+  label { display: inline-block; font-size: 13px; margin-top: 10px; margin-right: 6px; }
   input[type=text], input[type=date] {
     padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px;
   }
@@ -81,6 +96,30 @@ ORTAK_STIL = """
     border-radius: 4px; cursor: pointer; font-size: 13px; margin-top: 10px;
   }
   button:hover { background: #1d4ed8; }
+
+  /* Tek kutulu genel arama formları için: etiket + metin kutusu + buton
+     aynı satırda, metin kutusu (input) kalan tüm genişliği doldursun diye
+     flex ile büyütülüyor -- input'a width vermeden bırakılırsa tarayıcı
+     varsayılanı çok dar kalıyor (erk-database'de "ara kutusu çok ufak
+     kalmış" diye düzeltildi). Bu sınıfı genel arama formunun etiket+
+     girdi+buton'unu saran bir <div>'e koy. */
+  .genel-arama-satiri { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .genel-arama-satiri label { margin-top: 0; margin-right: 0; }
+  .genel-arama-satiri input[type=text] { flex: 1 1 240px; min-width: 200px; }
+  .genel-arama-satiri button { margin-top: 0; }
+
+  /* Bir arama formunda "Ara" butonunun YANINA hızlı kısayol butonları
+     (örn. Dün/Bu Ay/Geçen Ay/Bu Yıl) koymak istersen bu iki sınıfı
+     kullan -- ALTINA değil, AYNI SATIRA gelsinler diye tek bir flex
+     satırına konuyorlar (erk-database'de tarih aralığı formunda böyle
+     kullanılıyor, bkz. viewer.py). */
+  .buton-satiri { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .buton-satiri button { margin-top: 0; }
+  .buton-ikincil {
+    background: #eef1f5; color: #1f2937; border: 1px solid #cbd5e1;
+    padding: 7px 12px; font-size: 12px;
+  }
+  .buton-ikincil:hover { background: #e2e8f0; }
 
   .tablo-sarmalayici {
     background: #fff;
